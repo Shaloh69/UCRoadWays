@@ -1,0 +1,49 @@
+name: ucroadways
+description: A Flutter app for real-time location tracking and smart navigation.
+
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=2.17.0 <4.0.0'
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # Core dependencies only
+  cupertino_icons: ^1.0.2
+  provider: ^6.1.1
+  http: ^1.1.0
+  shared_preferences: ^2.2.2
+  
+  # Location services
+  geolocator: ^10.1.0
+  permission_handler: ^11.0.1
+  
+  # Mapping (compatible versions)
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.0
+  
+  # Utilities
+  uuid: ^4.1.0
+  json_annotation: ^4.8.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  
+  # Add these for code generation
+  build_runner: ^2.4.7
+  json_serializable: ^6.7.1
+  json_annotation: ^4.8.1
+
+flutter:
+  uses-material-design: true
+  
+  # Remove assets for now to avoid errors
+  # assets:
+  #   - assets/images/
