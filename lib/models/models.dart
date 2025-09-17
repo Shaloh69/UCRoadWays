@@ -242,3 +242,42 @@ class NavigationRoute {
   factory NavigationRoute.fromJson(Map<String, dynamic> json) => _$NavigationRouteFromJson(json);
   Map<String, dynamic> toJson() => _$NavigationRouteToJson(this);
 }
+
+// Simple intersection class without JSON serialization for now
+class Intersection {
+  final String id;
+  final String name;
+  final LatLng position;
+  final String floorId;
+  final List<String> connectedRoadIds;
+  final String type;
+  final Map<String, dynamic> properties;
+
+  Intersection({
+    required this.id,
+    required this.name,
+    required this.position,
+    required this.floorId,
+    this.connectedRoadIds = const [],
+    this.type = 'simple',
+    this.properties = const {},
+  });
+
+  Intersection copyWith({
+    String? name,
+    LatLng? position,
+    List<String>? connectedRoadIds,
+    String? type,
+    Map<String, dynamic>? properties,
+  }) {
+    return Intersection(
+      id: id,
+      name: name ?? this.name,
+      position: position ?? this.position,
+      floorId: floorId,
+      connectedRoadIds: connectedRoadIds ?? this.connectedRoadIds,
+      type: type ?? this.type,
+      properties: properties ?? this.properties,
+    );
+  }
+}
