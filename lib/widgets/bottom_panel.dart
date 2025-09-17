@@ -57,7 +57,7 @@ class _BottomPanelState extends State<BottomPanel>
       child: AnimatedBuilder(
         animation: _animation,
         builder: (context, child) {
-          final height = 80 + (300 * _animation.value);
+          final height = 96 + (300 * _animation.value);
           return Container(
             height: height,
             decoration: BoxDecoration(

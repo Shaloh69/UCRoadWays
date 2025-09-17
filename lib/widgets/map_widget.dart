@@ -580,15 +580,15 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
     });
   }
 
-  void _selectRoadForConnection(String roadId) {
-    setState(() {
-      if (_selectedRoadIds.contains(roadId)) {
-        _selectedRoadIds.remove(roadId);
-      } else {
-        _selectedRoadIds.add(roadId);
-      }
-    });
-  }
+  // void _selectRoadForConnection(String roadId) {
+  //   setState(() {
+  //     if (_selectedRoadIds.contains(roadId)) {
+  //       _selectedRoadIds.remove(roadId);
+  //     } else {
+  //       _selectedRoadIds.add(roadId);
+  //     }
+  //   });
+  // }
 
   void _connectSelectedRoads() {
     if (_selectedRoadIds.length >= 2) {
