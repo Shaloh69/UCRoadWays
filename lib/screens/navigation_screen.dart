@@ -5,8 +5,9 @@ import '../providers/location_provider.dart';
 import '../providers/road_system_provider.dart';
 import '../providers/building_provider.dart';
 import '../models/models.dart';
-import '../services/navigation_service.dart';
 import 'dart:math';
+
+// import '../services/navigation_service.dart';
 
 class NavigationScreen extends StatefulWidget {
   const NavigationScreen({super.key});
@@ -21,7 +22,9 @@ class _NavigationScreenState extends State<NavigationScreen>
   
   LatLng? _startPoint;
   LatLng? _endPoint;
+  // ignore: unused_field
   String? _startDescription;
+  // ignore: unused_field
   String? _endDescription;
   NavigationRoute? _currentRoute;
   bool _isCalculatingRoute = false;

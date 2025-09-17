@@ -259,9 +259,9 @@ class _BottomPanelState extends State<BottomPanel>
         
         return ListTile(
           leading: Icon(
-            Icons.road,
-            color: isIndoor ? Colors.orange : Colors.grey[700],
-          ),
+              Icons.route,
+              color: isIndoor ? Colors.orange : Colors.grey[700],
+            ),
           title: Text(road.name),
           subtitle: Text(
             '${road.type} • ${road.points.length} points • ${road.width.toStringAsFixed(1)}m wide',

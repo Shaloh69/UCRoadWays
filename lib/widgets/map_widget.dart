@@ -40,8 +40,8 @@ class _UCRoadWaysMapState extends State<UCRoadWaysMap> {
         return FlutterMap(
           mapController: widget.mapController,
           options: MapOptions(
-            center: _getMapCenter(locationProvider, currentSystem),
-            zoom: currentSystem?.zoom ?? _defaultZoom,
+            initialCenter: _getMapCenter(locationProvider, currentSystem),
+            initialZoom: currentSystem?.zoom ?? _defaultZoom,
             minZoom: 10.0,
             maxZoom: 20.0,
             onTap: _isAddingRoad || _isAddingLandmark 
@@ -98,7 +98,7 @@ class _UCRoadWaysMapState extends State<UCRoadWaysMap> {
                     point: locationProvider.currentLatLng!,
                     width: 40,
                     height: 40,
-                    builder: (context) => Container(
+                    child: Container(
                       decoration: BoxDecoration(
                         color: Colors.blue.withOpacity(0.3),
                         shape: BoxShape.circle,
@@ -122,7 +122,9 @@ class _UCRoadWaysMapState extends State<UCRoadWaysMap> {
                     points: _tempRoadPoints,
                     color: Colors.red.withOpacity(0.7),
                     strokeWidth: 3.0,
-                    isDotted: true,
+                    // Using a dashed pattern with borderColor to simulate dotted line
+                    borderColor: Colors.white,
+                    borderStrokeWidth: 1.0,
                   ),
                 ],
               ),
@@ -188,7 +190,7 @@ class _UCRoadWaysMapState extends State<UCRoadWaysMap> {
         point: landmark.position,
         width: 30,
         height: 30,
-        builder: (context) => GestureDetector(
+        child: GestureDetector(
           onTap: () => _showLandmarkInfo(context, landmark),
           child: Container(
             decoration: BoxDecoration(
@@ -213,7 +215,7 @@ class _UCRoadWaysMapState extends State<UCRoadWaysMap> {
         point: landmark.position,
         width: 25,
         height: 25,
-        builder: (context) => GestureDetector(
+        child: GestureDetector(
           onTap: () => _showLandmarkInfo(context, landmark),
           child: Container(
             decoration: BoxDecoration(
@@ -238,7 +240,7 @@ class _UCRoadWaysMapState extends State<UCRoadWaysMap> {
         point: building.centerPosition,
         width: 60,
         height: 40,
-        builder: (context) => GestureDetector(
+        child: GestureDetector(
           onTap: () => buildingProvider.selectBuilding(building.id),
           child: Container(
             decoration: BoxDecoration(
@@ -360,7 +362,7 @@ class _UCRoadWaysMapState extends State<UCRoadWaysMap> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.road),
+              leading: const Icon(Icons.route),
               title: const Text('Start Road'),
               onTap: () {
                 Navigator.pop(context);
@@ -397,33 +399,230 @@ class _UCRoadWaysMapState extends State<UCRoadWaysMap> {
   }
 
   void _showAddLandmarkDialog(LatLng point, RoadSystemProvider provider) {
-    // Implementation for adding landmarks
-    // This would show a dialog to input landmark details
+    final nameController = TextEditingController();
+    String selectedType = 'entrance';
+    final descriptionController = TextEditingController();
+
+    final landmarkTypes = [
+      'entrance',
+      'bathroom',
+      'classroom',
+      'office',
+      'elevator',
+      'stairs',
+    ];
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Add Landmark'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Landmark Name',
+                  hintText: 'Enter landmark name',
+                ),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                value: selectedType,
+                decoration: const InputDecoration(
+                  labelText: 'Type',
+                ),
+                items: landmarkTypes.map((type) => DropdownMenuItem(
+                  value: type,
+                  child: Row(
+                    children: [
+                      Icon(_getLandmarkIcon(type), size: 16),
+                      const SizedBox(width: 8),
+                      Text(type[0].toUpperCase() + type.substring(1)),
+                    ],
+                  ),
+                )).toList(),
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() {
+                      selectedType = value;
+                    });
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: descriptionController,
+                decoration: const InputDecoration(
+                  labelText: 'Description (optional)',
+                  hintText: 'Enter description',
+                ),
+                maxLines: 2,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                if (nameController.text.isNotEmpty) {
+                  _addLandmark(
+                    point,
+                    nameController.text,
+                    selectedType,
+                    descriptionController.text,
+                    provider,
+                  );
+                  Navigator.pop(context);
+                }
+              },
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showAddBuildingDialog(LatLng point, RoadSystemProvider provider) {
-    // Implementation for adding buildings
-    // This would show a dialog to input building details
+    final nameController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Building'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(
+                labelText: 'Building Name',
+                hintText: 'Enter building name',
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Position: ${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              if (nameController.text.isNotEmpty) {
+                _addBuilding(point, nameController.text, provider);
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _addLandmark(LatLng point, String name, String type, String description, RoadSystemProvider provider) {
+    final currentSystem = provider.currentSystem;
+    if (currentSystem == null) return;
+
+    final newLandmark = Landmark(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: name,
+      type: type,
+      position: point,
+      floorId: '', // Outdoor landmark
+      description: description,
+    );
+
+    final updatedLandmarks = List<Landmark>.from(currentSystem.outdoorLandmarks)
+      ..add(newLandmark);
+
+    final updatedSystem = currentSystem.copyWith(
+      outdoorLandmarks: updatedLandmarks,
+    );
+
+    provider.updateCurrentSystem(updatedSystem);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Added $name')),
+    );
+  }
+
+  void _addBuilding(LatLng point, String name, RoadSystemProvider provider) {
+    final currentSystem = provider.currentSystem;
+    if (currentSystem == null) return;
+
+    final newBuilding = Building(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: name,
+      centerPosition: point,
+    );
+
+    final updatedBuildings = List<Building>.from(currentSystem.buildings)
+      ..add(newBuilding);
+
+    final updatedSystem = currentSystem.copyWith(
+      buildings: updatedBuildings,
+    );
+
+    provider.updateCurrentSystem(updatedSystem);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Added building: $name')),
+    );
   }
 
   void _showLandmarkInfo(BuildContext context, Landmark landmark) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(landmark.name),
+        title: Row(
+          children: [
+            Icon(
+              _getLandmarkIcon(landmark.type),
+              color: _getLandmarkColor(landmark.type),
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: Text(landmark.name)),
+          ],
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Type: ${landmark.type}'),
-            if (landmark.description.isNotEmpty)
+            Text('Type: ${landmark.type[0].toUpperCase()}${landmark.type.substring(1)}'),
+            if (landmark.description.isNotEmpty) ...[
+              const SizedBox(height: 8),
               Text('Description: ${landmark.description}'),
+            ],
+            const SizedBox(height: 8),
+            Text(
+              'Location: ${landmark.position.latitude.toStringAsFixed(6)}, ${landmark.position.longitude.toStringAsFixed(6)}',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              // TODO: Implement navigation to this landmark
+            },
+            child: const Text('Navigate'),
           ),
         ],
       ),

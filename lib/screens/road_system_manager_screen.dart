@@ -216,7 +216,7 @@ class _RoadSystemManagerScreenState extends State<RoadSystemManagerScreen> {
                           _buildStatCard(
                             'Roads',
                             system.outdoorRoads.length.toString(),
-                            Icons.road,
+                            Icons.route,
                             Colors.green,
                           ),
                           const SizedBox(width: 12),

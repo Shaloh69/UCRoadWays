@@ -68,7 +68,7 @@ class _FloatingControlsState extends State<FloatingControls> {
             child: Column(
               children: [
                 _buildEditingToolButton(
-                  icon: Icons.road,
+                  icon: Icons.route, // Changed from Icons.road to Icons.route
                   tool: EditingTool.road,
                   tooltip: 'Add Road',
                 ),
@@ -141,7 +141,11 @@ class _FloatingControlsState extends State<FloatingControls> {
                     ),
                     onChanged: (systemId) {
                       if (systemId != null) {
-                        provider.setCurrentSystem(systemId);
+                        if (systemId == 'new') {
+                          _showNewSystemDialog(context);
+                        } else {
+                          provider.setCurrentSystem(systemId);
+                        }
                       }
                     },
                     items: [
@@ -263,13 +267,13 @@ class _FloatingControlsState extends State<FloatingControls> {
   }
 
   void _zoomIn() {
-    final zoom = widget.mapController.zoom;
-    widget.mapController.move(widget.mapController.center, zoom + 1);
+    final zoom = widget.mapController.camera.zoom;
+    widget.mapController.move(widget.mapController.camera.center, zoom + 1);
   }
 
   void _zoomOut() {
-    final zoom = widget.mapController.zoom;
-    widget.mapController.move(widget.mapController.center, zoom - 1);
+    final zoom = widget.mapController.camera.zoom;
+    widget.mapController.move(widget.mapController.camera.center, zoom - 1);
   }
 
   void _toggleEditMode() {
@@ -321,7 +325,7 @@ class _FloatingControlsState extends State<FloatingControls> {
             onPressed: () {
               if (nameController.text.isNotEmpty) {
                 final center = locationProvider.currentLatLng ?? 
-                              widget.mapController.center;
+                              widget.mapController.camera.center;
                 Provider.of<RoadSystemProvider>(context, listen: false)
                     .createNewRoadSystem(nameController.text, center);
                 Navigator.pop(context);

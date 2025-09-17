@@ -348,7 +348,7 @@ class _BuildingManagerScreenState extends State<BuildingManagerScreen>
                   children: [
                     Row(
                       children: [
-                        _buildFloorStat('Roads', floor.roads.length, Icons.road, Colors.green),
+                         _buildFloorStat('Roads', floor.roads.length, Icons.route, Colors.green),
                         const SizedBox(width: 16),
                         _buildFloorStat('Landmarks', floor.landmarks.length, Icons.place, Colors.orange),
                       ],
