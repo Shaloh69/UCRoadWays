@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:uuid/uuid.dart';
@@ -25,11 +26,15 @@ class RoadSystemProvider extends ChangeNotifier {
       _roadSystems = await DataStorageService.loadRoadSystems();
       
       final currentSystemId = await DataStorageService.getCurrentRoadSystemId();
-      if (currentSystemId != null) {
-        _currentSystem = _roadSystems.firstWhere(
-          (system) => system.id == currentSystemId,
-          orElse: () => _roadSystems.isNotEmpty ? _roadSystems.first : null,
-        );
+      if (currentSystemId != null && _roadSystems.isNotEmpty) {
+        try {
+          _currentSystem = _roadSystems.firstWhere(
+            (system) => system.id == currentSystemId,
+          );
+        } catch (e) {
+          // If system with that ID not found, use first available
+          _currentSystem = _roadSystems.first;
+        }
       } else if (_roadSystems.isNotEmpty) {
         _currentSystem = _roadSystems.first;
       }

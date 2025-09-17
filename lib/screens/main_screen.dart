@@ -11,6 +11,7 @@ import '../widgets/bottom_panel.dart';
 import '../screens/road_system_manager_screen.dart';
 import '../screens/building_manager_screen.dart';
 import '../screens/navigation_screen.dart';
+import '../screens/road_network_analyze_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -58,6 +59,11 @@ class _MainScreenState extends State<MainScreen> {
             icon: const Icon(Icons.business),
             onPressed: () => _showBuildingManager(),
             tooltip: 'Buildings',
+          ),
+          IconButton(
+            icon: const Icon(Icons.analytics),
+            onPressed: () => _showRoadNetworkAnalyzer(),
+            tooltip: 'Network Analyzer',
           ),
           IconButton(
             icon: const Icon(Icons.navigation),
@@ -142,6 +148,14 @@ class _MainScreenState extends State<MainScreen> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => const BuildingManagerScreen(),
+      ),
+    );
+  }
+
+  void _showRoadNetworkAnalyzer() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const RoadNetworkAnalyzerScreen(),
       ),
     );
   }

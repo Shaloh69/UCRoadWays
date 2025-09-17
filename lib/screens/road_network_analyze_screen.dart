@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:latlong2/latlong.dart';
 import '../providers/road_system_provider.dart';
 import '../models/models.dart';
 
@@ -571,9 +572,25 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
   }
 
   void _viewOnMap(LatLng position) {
-    // This would navigate back to the main screen and center on the position
+    // Navigate back to the main screen and show a message about the position
     Navigator.pop(context);
-    // You could pass the position back to center the map
+    
+    // You could implement a callback or use a provider to communicate 
+    // the position back to the main screen to center the map
+    // For now, just show a snackbar with the coordinates
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '📍 Intersection at: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}'
+        ),
+        action: SnackBarAction(
+          label: 'CENTER MAP',
+          onPressed: () {
+            // This could trigger map centering if you implement the callback
+          },
+        ),
+      ),
+    );
   }
 
   @override

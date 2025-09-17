@@ -245,8 +245,18 @@ class NavigationService {
     Building building,
     String floorId,
   ) {
-    final floor = building.floors.firstWhere((f) => f.id == floorId);
-    final circulation = floor.landmarks.where(
+    // Find the floor first
+    Floor? targetFloor;
+    for (final floor in building.floors) {
+      if (floor.id == floorId) {
+        targetFloor = floor;
+        break;
+      }
+    }
+    
+    if (targetFloor == null) return null;
+    
+    final circulation = targetFloor.landmarks.where(
       (l) => l.type == 'elevator' || l.type == 'stairs'
     );
     
@@ -271,17 +281,34 @@ class NavigationService {
     Building building,
     String floorId,
   ) {
-    final floor = building.floors.firstWhere((f) => f.id == floorId);
+    // Find the target floor
+    Floor? targetFloor;
+    for (final floor in building.floors) {
+      if (floor.id == floorId) {
+        targetFloor = floor;
+        break;
+      }
+    }
+    
+    if (targetFloor == null) return null;
     
     // Find circulation of the same type with similar name or position
-    return floor.landmarks.firstWhere(
-      (l) => l.type == circulation.type && 
-             l.name.contains(circulation.name.split(' ').first),
-      orElse: () => floor.landmarks.firstWhere(
-        (l) => l.type == circulation.type,
-        orElse: () => circulation, // Fallback
-      ),
+    final sameTypeCirculation = targetFloor.landmarks.where(
+      (l) => l.type == circulation.type
     );
+    
+    if (sameTypeCirculation.isEmpty) return null;
+    
+    // Try to find one with similar name first
+    final firstWord = circulation.name.split(' ').first;
+    for (final landmark in sameTypeCirculation) {
+      if (landmark.name.contains(firstWord)) {
+        return landmark;
+      }
+    }
+    
+    // Fall back to first circulation of same type
+    return sameTypeCirculation.first;
   }
 
   static double _calculateTotalDistance(List<LatLng> waypoints) {
