@@ -3,55 +3,16 @@ import 'package:json_annotation/json_annotation.dart';
 
 part 'models.g.dart';
 
-// Custom converter for LatLng
-class LatLngConverter implements JsonConverter<LatLng, Map<String, dynamic>> {
-  const LatLngConverter();
-
-  @override
-  LatLng fromJson(Map<String, dynamic> json) {
-    return LatLng(
-      (json['latitude'] as num).toDouble(),
-      (json['longitude'] as num).toDouble(),
-    );
-  }
-
-  @override
-  Map<String, dynamic> toJson(LatLng latLng) {
-    return {
-      'latitude': latLng.latitude,
-      'longitude': latLng.longitude,
-    };
-  }
-}
-
-// Custom converter for List<LatLng>
-class LatLngListConverter implements JsonConverter<List<LatLng>, List<dynamic>> {
-  const LatLngListConverter();
-
-  @override
-  List<LatLng> fromJson(List<dynamic> json) {
-    return json.map((e) => const LatLngConverter().fromJson(e as Map<String, dynamic>)).toList();
-  }
-
-  @override
-  List<dynamic> toJson(List<LatLng> latLngs) {
-    return latLngs.map((e) => const LatLngConverter().toJson(e)).toList();
-  }
-}
-
 @JsonSerializable()
 class Road {
   final String id;
   final String name;
-  
-  @LatLngListConverter()
   final List<LatLng> points;
-  
   final String type; // 'road', 'walkway', 'corridor'
   final double width;
   final bool isOneWay;
-  final String floorId;
-  final List<String> connectedIntersections; // Connected intersection IDs
+  final String floorId; // Empty string for outdoor roads
+  final List<String> connectedIntersections; // NEW: For road network analysis
   final Map<String, dynamic> properties;
 
   Road({
@@ -68,6 +29,10 @@ class Road {
 
   factory Road.fromJson(Map<String, dynamic> json) => _$RoadFromJson(json);
   Map<String, dynamic> toJson() => _$RoadToJson(this);
+
+  // NEW: Helper methods
+  bool get isIndoor => floorId.isNotEmpty;
+  bool get isOutdoor => floorId.isEmpty;
 
   Road copyWith({
     String? name,
@@ -97,12 +62,11 @@ class Landmark {
   final String id;
   final String name;
   final String type; // 'bathroom', 'classroom', 'office', 'entrance', 'elevator', 'stairs'
-  
-  @LatLngConverter()
   final LatLng position;
-  
-  final String floorId;
+  final String floorId; // Empty string for outdoor landmarks
   final String description;
+  final List<String> connectedFloors; // NEW: For vertical circulation
+  final String buildingId; // NEW: Link to building
   final Map<String, dynamic> properties;
 
   Landmark({
@@ -112,17 +76,27 @@ class Landmark {
     required this.position,
     required this.floorId,
     this.description = '',
+    this.connectedFloors = const [],
+    this.buildingId = '',
     this.properties = const {},
   });
 
   factory Landmark.fromJson(Map<String, dynamic> json) => _$LandmarkFromJson(json);
   Map<String, dynamic> toJson() => _$LandmarkToJson(this);
 
+  // NEW: Helper methods
+  bool get isIndoor => floorId.isNotEmpty;
+  bool get isOutdoor => floorId.isEmpty;
+  bool get isVerticalCirculation => type == 'elevator' || type == 'stairs';
+  bool get isAccessible => properties['accessible'] == true || type == 'elevator';
+
   Landmark copyWith({
     String? name,
     String? type,
     LatLng? position,
     String? description,
+    List<String>? connectedFloors,
+    String? buildingId,
     Map<String, dynamic>? properties,
   }) {
     return Landmark(
@@ -132,6 +106,8 @@ class Landmark {
       position: position ?? this.position,
       floorId: floorId,
       description: description ?? this.description,
+      connectedFloors: connectedFloors ?? this.connectedFloors,
+      buildingId: buildingId ?? this.buildingId,
       properties: properties ?? this.properties,
     );
   }
@@ -145,6 +121,8 @@ class Floor {
   final String buildingId;
   final List<Road> roads;
   final List<Landmark> landmarks;
+  final List<String> connectedFloors; // NEW: Floors accessible from this floor
+  final LatLng? centerPosition; // NEW: Center point for floor
   final Map<String, dynamic> properties;
 
   Floor({
@@ -154,17 +132,31 @@ class Floor {
     required this.buildingId,
     this.roads = const [],
     this.landmarks = const [],
+    this.connectedFloors = const [],
+    this.centerPosition,
     this.properties = const {},
   });
 
   factory Floor.fromJson(Map<String, dynamic> json) => _$FloorFromJson(json);
   Map<String, dynamic> toJson() => _$FloorToJson(this);
 
+  // NEW: Helper methods
+  List<Landmark> get verticalCirculation => 
+      landmarks.where((l) => l.isVerticalCirculation).toList();
+  
+  List<Landmark> get entrances => 
+      landmarks.where((l) => l.type == 'entrance').toList();
+  
+  List<Landmark> get accessibleFeatures => 
+      landmarks.where((l) => l.isAccessible).toList();
+
   Floor copyWith({
     String? name,
     int? level,
     List<Road>? roads,
     List<Landmark>? landmarks,
+    List<String>? connectedFloors,
+    LatLng? centerPosition,
     Map<String, dynamic>? properties,
   }) {
     return Floor(
@@ -174,6 +166,8 @@ class Floor {
       buildingId: buildingId,
       roads: roads ?? this.roads,
       landmarks: landmarks ?? this.landmarks,
+      connectedFloors: connectedFloors ?? this.connectedFloors,
+      centerPosition: centerPosition ?? this.centerPosition,
       properties: properties ?? this.properties,
     );
   }
@@ -183,14 +177,11 @@ class Floor {
 class Building {
   final String id;
   final String name;
-  
-  @LatLngConverter()
   final LatLng centerPosition;
-  
-  @LatLngListConverter()
   final List<LatLng> boundaryPoints;
-  
   final List<Floor> floors;
+  final List<String> entranceFloorIds; // NEW: Main entrance floors
+  final int defaultFloorLevel; // NEW: Default floor to show
   final Map<String, dynamic> properties;
 
   Building({
@@ -199,17 +190,27 @@ class Building {
     required this.centerPosition,
     this.boundaryPoints = const [],
     this.floors = const [],
+    this.entranceFloorIds = const [],
+    this.defaultFloorLevel = 0,
     this.properties = const {},
   });
 
   factory Building.fromJson(Map<String, dynamic> json) => _$BuildingFromJson(json);
   Map<String, dynamic> toJson() => _$BuildingToJson(this);
 
+  // NEW: Helper methods
+  Floor? get defaultFloor => floors.where((f) => f.level == defaultFloorLevel).firstOrNull;
+  List<Floor> get sortedFloors => [...floors]..sort((a, b) => b.level.compareTo(a.level));
+  List<Landmark> get allVerticalCirculation => 
+      floors.expand((f) => f.verticalCirculation).toList();
+
   Building copyWith({
     String? name,
     LatLng? centerPosition,
     List<LatLng>? boundaryPoints,
     List<Floor>? floors,
+    List<String>? entranceFloorIds,
+    int? defaultFloorLevel,
     Map<String, dynamic>? properties,
   }) {
     return Building(
@@ -218,51 +219,8 @@ class Building {
       centerPosition: centerPosition ?? this.centerPosition,
       boundaryPoints: boundaryPoints ?? this.boundaryPoints,
       floors: floors ?? this.floors,
-      properties: properties ?? this.properties,
-    );
-  }
-}
-
-@JsonSerializable()
-class Intersection {
-  final String id;
-  final String name;
-  
-  @LatLngConverter()
-  final LatLng position;
-  
-  final String floorId;
-  final List<String> connectedRoadIds;
-  final String type;
-  final Map<String, dynamic> properties;
-
-  Intersection({
-    required this.id,
-    required this.name,
-    required this.position,
-    required this.floorId,
-    this.connectedRoadIds = const [],
-    this.type = 'simple',
-    this.properties = const {},
-  });
-
-  factory Intersection.fromJson(Map<String, dynamic> json) => _$IntersectionFromJson(json);
-  Map<String, dynamic> toJson() => _$IntersectionToJson(this);
-
-  Intersection copyWith({
-    String? name,
-    LatLng? position,
-    List<String>? connectedRoadIds,
-    String? type,
-    Map<String, dynamic>? properties,
-  }) {
-    return Intersection(
-      id: id,
-      name: name ?? this.name,
-      position: position ?? this.position,
-      floorId: floorId,
-      connectedRoadIds: connectedRoadIds ?? this.connectedRoadIds,
-      type: type ?? this.type,
+      entranceFloorIds: entranceFloorIds ?? this.entranceFloorIds,
+      defaultFloorLevel: defaultFloorLevel ?? this.defaultFloorLevel,
       properties: properties ?? this.properties,
     );
   }
@@ -275,11 +233,8 @@ class RoadSystem {
   final List<Building> buildings;
   final List<Road> outdoorRoads;
   final List<Landmark> outdoorLandmarks;
-  final List<Intersection> outdoorIntersections; // Outdoor intersections
-  
-  @LatLngConverter()
+  final List<Intersection> outdoorIntersections; // NEW: For road network
   final LatLng centerPosition;
-  
   final double zoom;
   final Map<String, dynamic> properties;
 
@@ -297,6 +252,19 @@ class RoadSystem {
 
   factory RoadSystem.fromJson(Map<String, dynamic> json) => _$RoadSystemFromJson(json);
   Map<String, dynamic> toJson() => _$RoadSystemToJson(this);
+
+  // NEW: Helper methods for comprehensive data access
+  List<Road> get allRoads => [
+    ...outdoorRoads,
+    ...buildings.expand((b) => b.floors.expand((f) => f.roads)),
+  ];
+
+  List<Landmark> get allLandmarks => [
+    ...outdoorLandmarks,
+    ...buildings.expand((b) => b.floors.expand((f) => f.landmarks)),
+  ];
+
+  List<Floor> get allFloors => buildings.expand((b) => b.floors).toList();
 
   RoadSystem copyWith({
     String? name,
@@ -325,19 +293,13 @@ class RoadSystem {
 @JsonSerializable()
 class NavigationRoute {
   final String id;
-  
-  @LatLngConverter()
   final LatLng start;
-  
-  @LatLngConverter()
   final LatLng end;
-  
-  @LatLngListConverter()
   final List<LatLng> waypoints;
-  
   final double totalDistance;
   final String instructions;
   final List<String> floorChanges;
+  final List<FloorTransition> floorTransitions; // NEW: Detailed floor changes
 
   NavigationRoute({
     required this.id,
@@ -347,8 +309,80 @@ class NavigationRoute {
     required this.totalDistance,
     this.instructions = '',
     this.floorChanges = const [],
+    this.floorTransitions = const [],
   });
 
   factory NavigationRoute.fromJson(Map<String, dynamic> json) => _$NavigationRouteFromJson(json);
   Map<String, dynamic> toJson() => _$NavigationRouteToJson(this);
+}
+
+// NEW: Intersection with JSON serialization
+@JsonSerializable()
+class Intersection {
+  final String id;
+  final String name;
+  final LatLng position;
+  final String floorId;
+  final List<String> connectedRoadIds;
+  final String type;
+  final Map<String, dynamic> properties;
+
+  Intersection({
+    required this.id,
+    required this.name,
+    required this.position,
+    required this.floorId,
+    this.connectedRoadIds = const [],
+    this.type = 'simple',
+    this.properties = const {},
+  });
+
+  factory Intersection.fromJson(Map<String, dynamic> json) => _$IntersectionFromJson(json);
+  Map<String, dynamic> toJson() => _$IntersectionToJson(this);
+
+  bool get isIndoor => floorId.isNotEmpty;
+  bool get isOutdoor => floorId.isEmpty;
+
+  Intersection copyWith({
+    String? name,
+    LatLng? position,
+    List<String>? connectedRoadIds,
+    String? type,
+    Map<String, dynamic>? properties,
+  }) {
+    return Intersection(
+      id: id,
+      name: name ?? this.name,
+      position: position ?? this.position,
+      floorId: floorId,
+      connectedRoadIds: connectedRoadIds ?? this.connectedRoadIds,
+      type: type ?? this.type,
+      properties: properties ?? this.properties,
+    );
+  }
+}
+
+// NEW: Floor transition for navigation
+@JsonSerializable()
+class FloorTransition {
+  final String fromFloorId;
+  final String toFloorId;
+  final String buildingId;
+  final LatLng transitionPoint;
+  final String transitionType; // 'elevator', 'stairs', 'ramp'
+  final String landmarkId; // ID of the elevator/stairs landmark
+  final String instructions;
+
+  FloorTransition({
+    required this.fromFloorId,
+    required this.toFloorId,
+    required this.buildingId,
+    required this.transitionPoint,
+    required this.transitionType,
+    required this.landmarkId,
+    required this.instructions,
+  });
+
+  factory FloorTransition.fromJson(Map<String, dynamic> json) => _$FloorTransitionFromJson(json);
+  Map<String, dynamic> toJson() => _$FloorTransitionToJson(this);
 }
