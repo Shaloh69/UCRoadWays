@@ -8,6 +8,8 @@ import 'dart:async';
 import '../providers/location_provider.dart';
 import '../providers/road_system_provider.dart';
 import '../providers/building_provider.dart';
+import '../providers/offline_map_provider.dart';
+import '../services/offline_tile_provider.dart';
 import '../models/models.dart';
 
 class UCRoadWaysMap extends StatefulWidget {
@@ -40,10 +42,21 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
   bool _hasInitialCentered = false;
   StreamSubscription<LatLng>? _locationSubscription;
 
+  // Offline map support
+  late OfflineTileProvider _tileProvider;
+
   @override
   void initState() {
     super.initState();
     _setupLocationListener();
+    _initializeOfflineTileProvider();
+  }
+
+  void _initializeOfflineTileProvider() {
+    _tileProvider = OfflineTileProvider(
+      onlineUrlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      preferOffline: true,
+    );
   }
 
   void _setupLocationListener() {
@@ -58,8 +71,8 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer3<LocationProvider, RoadSystemProvider, BuildingProvider>(
-      builder: (context, locationProvider, roadSystemProvider, buildingProvider, child) {
+    return Consumer4<LocationProvider, RoadSystemProvider, BuildingProvider, OfflineMapProvider>(
+      builder: (context, locationProvider, roadSystemProvider, buildingProvider, offlineMapProvider, child) {
         final currentSystem = roadSystemProvider.currentSystem;
         final currentLocation = locationProvider.currentLatLng;
         final selectedBuilding = buildingProvider.getSelectedBuilding(currentSystem);
@@ -78,9 +91,12 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
                 onLongPress: (tapPosition, point) => _handleMapLongPress(point, buildingProvider, roadSystemProvider),
               ),
               children: [
+                // Offline-first tile layer
                 TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  tileProvider: _tileProvider,
                   userAgentPackageName: 'com.ucroadways.app',
+                  tileSize: 256,
+                  maxZoom: 22,
                 ),
                 
                 // Building polygons (only show if not in indoor mode or if selected building)
@@ -127,9 +143,8 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
                       polylines: [
                         Polyline(
                           points: _tempRoadPoints,
-                          color: Colors.red,
+                          color: Colors.red.withOpacity(0.7),
                           strokeWidth: 4.0,
-                          // FIX: Replaced invalid pattern parameter with isDotted
                           isDotted: true,
                         ),
                       ],
@@ -138,28 +153,47 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
               ],
             ),
             
-            // Recording indicator
-            if (_isRecordingRoad)
+            // Download progress indicator
+            if (offlineMapProvider.isDownloading)
               Positioned(
-                top: 20,
-                left: 20,
-                right: 20,
+                top: 50,
+                left: 16,
+                right: 16,
                 child: Card(
-                  color: Colors.red,
                   child: Padding(
                     padding: const EdgeInsets.all(12),
-                    child: Row(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.fiber_manual_record, color: Colors.white),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Recording Road...',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        Row(
+                          children: [
+                            const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Downloading ${offlineMapProvider.currentRegionName}',
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: offlineMapProvider.cancelDownload,
+                              child: const Text('Cancel'),
+                            ),
+                          ],
                         ),
-                        const Spacer(),
+                        const SizedBox(height: 8),
+                        LinearProgressIndicator(
+                          value: offlineMapProvider.downloadProgress,
+                          backgroundColor: Colors.grey[300],
+                        ),
+                        const SizedBox(height: 4),
                         Text(
-                          '${_tempRoadPoints.length} points',
-                          style: const TextStyle(color: Colors.white),
+                          '${offlineMapProvider.currentTileCount}/${offlineMapProvider.totalTileCount} tiles (${(offlineMapProvider.downloadProgress * 100).toStringAsFixed(1)}%)',
+                          style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
                     ),
@@ -167,41 +201,52 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
                 ),
               ),
             
-            // Mode indicators
-            if (_isAddingLandmark || _isAddingBuilding)
+            // Recording/Adding indicators
+            if (_isRecordingRoad || _isAddingLandmark || _isAddingBuilding)
               Positioned(
-                top: 20,
-                left: 20,
-                right: 20,
-                child: Card(
-                  color: _isAddingLandmark ? Colors.green : Colors.purple,
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        Icon(
-                          _isAddingLandmark ? Icons.place : Icons.business,
-                          color: Colors.white,
+                bottom: 100,
+                left: 16,
+                right: 16,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                  decoration: BoxDecoration(
+                    color: _isRecordingRoad ? Colors.red : _isAddingLandmark ? Colors.green : Colors.purple,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _isRecordingRoad ? Icons.radio_button_checked : 
+                        _isAddingLandmark ? Icons.place : Icons.business,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _isRecordingRoad 
+                            ? 'Recording road... (${_tempRoadPoints.length} points)'
+                            : _isAddingLandmark 
+                                ? 'Tap to add landmark'
+                                : 'Tap to add building',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      ),
+                      const Spacer(),
+                      if (_isRecordingRoad)
+                        TextButton(
+                          onPressed: stopRoadRecording,
+                          child: const Text('Stop', style: TextStyle(color: Colors.white)),
                         ),
-                        const SizedBox(width: 8),
-                        Text(
-                          _isAddingLandmark 
-                              ? 'Tap to add landmark'
-                              : 'Tap to add building',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                        ),
-                        const Spacer(),
-                        IconButton(
-                          onPressed: () {
-                            setState(() {
-                              _isAddingLandmark = false;
-                              _isAddingBuilding = false;
-                            });
-                          },
-                          icon: const Icon(Icons.close, color: Colors.white),
-                        ),
-                      ],
-                    ),
+                      IconButton(
+                        onPressed: () {
+                          setState(() {
+                            _isRecordingRoad = false;
+                            _isAddingLandmark = false;
+                            _isAddingBuilding = false;
+                            _tempRoadPoints.clear();
+                          });
+                        },
+                        icon: const Icon(Icons.close, color: Colors.white),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -235,6 +280,35 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
   }
 
   // ROAD RECORDING METHODS
+
+  void startRoadRecording() {
+    setState(() {
+      _isRecordingRoad = true;
+      _tempRoadPoints.clear();
+      _lastRecordedPoint = null;
+    });
+
+    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      final locationProvider = Provider.of<LocationProvider>(context, listen: false);
+      final currentLocation = locationProvider.currentLatLng;
+      
+      if (currentLocation != null) {
+        _addPointWhileWalking(currentLocation);
+      }
+    });
+  }
+
+  void stopRoadRecording() {
+    if (_tempRoadPoints.length >= 2) {
+      _showRoadSaveDialog();
+    } else {
+      setState(() {
+        _isRecordingRoad = false;
+        _tempRoadPoints.clear();
+      });
+      _recordingTimer?.cancel();
+    }
+  }
 
   void _addPointWhileWalking(LatLng point) {
     if (_lastRecordedPoint != null) {
@@ -300,7 +374,7 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
       
       if (selectedBuilding != null && selectedFloor != null) {
         final updatedRoads = List<Road>.from(selectedFloor.roads)..add(newRoad);
-        final updatedFloor = selectedFloor.copyWith(roads: updatedRoads);
+        final updatedFloor = selectedFloor.copyWith(roads: updatedRoads, buildingId: '');
         
         final updatedFloors = selectedBuilding.floors
             .map((f) => f.id == selectedFloor.id ? updatedFloor : f)
@@ -336,7 +410,11 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
       );
     }
 
-    stopRoadRecording();
+    setState(() {
+      _isRecordingRoad = false;
+      _tempRoadPoints.clear();
+    });
+    _recordingTimer?.cancel();
   }
 
   // MAP RENDERING METHODS
@@ -432,30 +510,18 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
     
     // Outdoor landmarks (always visible unless in indoor mode)
     if (!buildingProvider.isIndoorMode) {
-      markers.addAll(system.outdoorLandmarks.map((landmark) => Marker(
-        point: landmark.position,
-        width: 30,
-        height: 30,
-        child: Icon(
-          _getLandmarkIcon(landmark.type),
-          color: _getLandmarkColor(landmark.type),
-          size: 24,
-        ),
-      )));
+      for (final building in system.buildings) {
+        for (final floor in building.floors) {
+          if (floor.level == 0) { // Ground floor landmarks visible outdoors
+            markers.addAll(floor.landmarks.map((landmark) => _createLandmarkMarker(landmark)));
+          }
+        }
+      }
     }
     
     // Indoor landmarks (only for selected floor)
     if (buildingProvider.isIndoorMode && selectedFloor != null) {
-      markers.addAll(selectedFloor.landmarks.map((landmark) => Marker(
-        point: landmark.position,
-        width: 30,
-        height: 30,
-        child: Icon(
-          _getLandmarkIcon(landmark.type),
-          color: _getLandmarkColor(landmark.type),
-          size: 20,
-        ),
-      )));
+      markers.addAll(selectedFloor.landmarks.map((landmark) => _createLandmarkMarker(landmark)));
     }
     
     return markers;
@@ -466,33 +532,76 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
     
     return system.buildings.map((building) => Marker(
       point: building.centerPosition,
-      width: 40,
+      width: 60,
       height: 40,
-      child: GestureDetector(
-        onTap: () {
-          buildingProvider.selectBuilding(building.id);
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.purple.withOpacity(0.8),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: const Icon(
-            Icons.business,
-            color: Colors.white,
-            size: 24,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.purple.withOpacity(0.9),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white, width: 1),
+        ),
+        child: Center(
+          child: Text(
+            building.name,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+            ),
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
           ),
         ),
       ),
     )).toList();
   }
 
+  Marker _createLandmarkMarker(Landmark landmark) {
+    return Marker(
+      point: landmark.position,
+      width: 30,
+      height: 30,
+      child: GestureDetector(
+        onTap: () => _showLandmarkInfo(landmark),
+        child: Container(
+          decoration: BoxDecoration(
+            color: _getLandmarkColor(landmark.type),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 2),
+          ),
+          child: Icon(
+            _getLandmarkIcon(landmark.type),
+            color: Colors.white,
+            size: 16,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Color _getLandmarkColor(String type) {
+    switch (type) {
+      case 'entrance':
+        return Colors.green;
+      case 'elevator':
+        return Colors.blue;
+      case 'stairs':
+        return Colors.orange;
+      case 'restroom':
+        return Colors.cyan;
+      case 'office':
+        return Colors.purple;
+      case 'classroom':
+        return Colors.indigo;
+      default:
+        return Colors.grey;
+    }
+  }
+
   IconData _getLandmarkIcon(String type) {
     switch (type) {
       case 'entrance':
-        return Icons.login;
-      case 'exit':
-        return Icons.logout;
+        return Icons.door_front_door;
       case 'elevator':
         return Icons.elevator;
       case 'stairs':
@@ -500,257 +609,64 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
       case 'restroom':
         return Icons.wc;
       case 'office':
-        return Icons.work;
+        return Icons.business_center;
       case 'classroom':
         return Icons.school;
-      case 'library':
-        return Icons.library_books;
-      case 'cafeteria':
-        return Icons.restaurant;
-      case 'parking':
-        return Icons.local_parking;
       default:
         return Icons.place;
     }
   }
 
-  Color _getLandmarkColor(String type) {
-    switch (type) {
-      case 'entrance':
-      case 'exit':
-        return Colors.green;
-      case 'elevator':
-      case 'stairs':
-        return Colors.orange;
-      case 'restroom':
-        return Colors.blue;
-      case 'office':
-        return Colors.purple;
-      case 'classroom':
-        return Colors.red;
-      case 'library':
-        return Colors.brown;
-      case 'cafeteria':
-        return Colors.orange;
-      case 'parking':
-        return Colors.grey;
-      default:
-        return Colors.grey;
-    }
+  // ADDING CONTROLS
+
+  void startAddingLandmark() {
+    setState(() {
+      _isAddingLandmark = true;
+      _isAddingBuilding = false;
+    });
+  }
+
+  void startAddingBuilding() {
+    setState(() {
+      _isAddingBuilding = true;
+      _isAddingLandmark = false;
+    });
   }
 
   // DIALOG METHODS
 
-  void _showBuildingDialog(LatLng point, RoadSystemProvider roadSystemProvider) {
-    final nameController = TextEditingController();
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Building'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(
-                labelText: 'Building Name',
-                hintText: 'Enter building name',
-              ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Column(
-                children: [
-                  Text(
-                    'Location',
-                    style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey[700]),
-                  ),
-                  Text('Lat: ${point.latitude.toStringAsFixed(6)}'),
-                  Text('Lng: ${point.longitude.toStringAsFixed(6)}'),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (nameController.text.isNotEmpty) {
-                _addBuilding(nameController.text, point, roadSystemProvider);
-                Navigator.pop(context);
-                setState(() {
-                  _isAddingBuilding = false;
-                });
-              }
-            },
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showLandmarkDialog(LatLng point, BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
-    final nameController = TextEditingController();
-    final descriptionController = TextEditingController();
-    
-    String selectedType = buildingProvider.isIndoorMode ? 'office' : 'landmark';
-    
-    final landmarkTypes = buildingProvider.isIndoorMode 
-        ? ['office', 'classroom', 'restroom', 'elevator', 'stairs', 'entrance', 'exit']
-        : ['landmark', 'parking', 'entrance', 'cafeteria', 'library'];
-
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: Text('Add ${buildingProvider.isIndoorMode ? 'Indoor' : 'Outdoor'} Landmark'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Landmark Name',
-                  hintText: 'Enter landmark name',
-                ),
-              ),
-              const SizedBox(height: 16),
-              
-              DropdownButtonFormField<String>(
-                value: selectedType,
-                decoration: const InputDecoration(labelText: 'Type'),
-                items: landmarkTypes.map((type) => DropdownMenuItem(
-                  value: type,
-                  child: Row(
-                    children: [
-                      Icon(_getLandmarkIcon(type), size: 16),
-                      const SizedBox(width: 8),
-                      Text(type.replaceFirst(type[0], type[0].toUpperCase())),
-                    ],
-                  ),
-                )).toList(),
-                onChanged: (value) {
-                  setState(() {
-                    selectedType = value!;
-                  });
-                },
-              ),
-              const SizedBox(height: 16),
-              
-              TextField(
-                controller: descriptionController,
-                decoration: const InputDecoration(
-                  labelText: 'Description (Optional)',
-                  hintText: 'Add notes or description',
-                ),
-                maxLines: 2,
-              ),
-              const SizedBox(height: 16),
-              
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.grey[100],
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      'Location',
-                      style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey[700]),
-                    ),
-                    Text('Lat: ${point.latitude.toStringAsFixed(6)}'),
-                    Text('Lng: ${point.longitude.toStringAsFixed(6)}'),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () {
-                if (nameController.text.isNotEmpty) {
-                  _addLandmark(
-                    nameController.text,
-                    selectedType,
-                    point,
-                    descriptionController.text,
-                    buildingProvider,
-                    roadSystemProvider,
-                  );
-                  Navigator.pop(context);
-                  setState(() {
-                    _isAddingLandmark = false;
-                  });
-                }
-              },
-              child: const Text('Add'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showRoadDetailsDialog() {
-    final buildingProvider = Provider.of<BuildingProvider>(context, listen: false);
-    final nameController = TextEditingController();
-    
-    String selectedType = buildingProvider.isIndoorMode ? 'corridor' : 'walkway';
-    double width = buildingProvider.isIndoorMode ? 2.0 : 3.0;
+  void _showRoadSaveDialog() {
+    String name = '';
+    String type = 'corridor';
+    double width = 3.0;
     bool isOneWay = false;
 
-    final roadTypes = buildingProvider.isIndoorMode 
-        ? ['corridor', 'walkway', 'hallway']
-        : ['walkway', 'road', 'path'];
-
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
-          title: Text('Save ${buildingProvider.isIndoorMode ? 'Indoor' : 'Outdoor'} Road'),
+          title: const Text('Save Road'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Road Name',
-                  hintText: 'Enter road name',
-                ),
+                decoration: const InputDecoration(labelText: 'Road Name'),
+                onChanged: (value) => name = value,
               ),
               const SizedBox(height: 16),
-              
               DropdownButtonFormField<String>(
-                value: selectedType,
                 decoration: const InputDecoration(labelText: 'Road Type'),
-                items: roadTypes.map((type) => DropdownMenuItem(
-                  value: type,
-                  child: Text(type.replaceFirst(type[0], type[0].toUpperCase())),
-                )).toList(),
-                onChanged: (value) {
-                  setState(() {
-                    selectedType = value!;
-                  });
-                },
+                value: type,
+                items: const [
+                  DropdownMenuItem(value: 'corridor', child: Text('Corridor')),
+                  DropdownMenuItem(value: 'hallway', child: Text('Hallway')),
+                  DropdownMenuItem(value: 'walkway', child: Text('Walkway')),
+                  DropdownMenuItem(value: 'road', child: Text('Road')),
+                  DropdownMenuItem(value: 'path', child: Text('Path')),
+                ],
+                onChanged: (value) => setState(() => type = value!),
               ),
               const SizedBox(height: 16),
-              
               Row(
                 children: [
                   const Text('Width: '),
@@ -761,55 +677,35 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
                       max: 10.0,
                       divisions: 18,
                       label: '${width.toStringAsFixed(1)}m',
-                      onChanged: (value) {
-                        setState(() {
-                          width = value;
-                        });
-                      },
+                      onChanged: (value) => setState(() => width = value),
                     ),
                   ),
                 ],
               ),
-              
               CheckboxListTile(
-                title: const Text('One-way road'),
+                title: const Text('One Way'),
                 value: isOneWay,
-                onChanged: (value) {
-                  setState(() {
-                    isOneWay = value!;
-                  });
-                },
-              ),
-              const SizedBox(height: 16),
-              
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.blue[50],
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  'Road recorded with ${_tempRoadPoints.length} points',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
+                onChanged: (value) => setState(() => isOneWay = value!),
               ),
             ],
           ),
           actions: [
             TextButton(
               onPressed: () {
-                Navigator.pop(context);
-                stopRoadRecording();
+                Navigator.of(context).pop();
+                this.setState(() {
+                  _isRecordingRoad = false;
+                  _tempRoadPoints.clear();
+                });
+                _recordingTimer?.cancel();
               },
               child: const Text('Cancel'),
             ),
-            TextButton(
-              onPressed: () {
-                if (nameController.text.isNotEmpty) {
-                  _saveRoad(nameController.text, selectedType, width, isOneWay);
-                  Navigator.pop(context);
-                }
-              },
+            ElevatedButton(
+              onPressed: name.isNotEmpty ? () {
+                Navigator.of(context).pop();
+                _saveRoad(name, type, width, isOneWay);
+              } : null,
               child: const Text('Save'),
             ),
           ],
@@ -818,96 +714,124 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
     );
   }
 
-  // BUILDING CREATION AND MANAGEMENT
+  void _showLandmarkDialog(LatLng point, BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
+    String name = '';
+    String type = 'office';
+    String description = '';
 
-  void startBuildingMode() {
-    setState(() {
-      _isAddingBuilding = true;
-      _isAddingLandmark = false;
-      _isRecordingRoad = false;
-    });
-  }
-
-  void startLandmarkMode() {
-    setState(() {
-      _isAddingLandmark = true;
-      _isAddingBuilding = false;
-      _isRecordingRoad = false;
-    });
-  }
-
-  void startRoadRecording() {
-    setState(() {
-      _isRecordingRoad = true;
-      _isAddingLandmark = false;
-      _isAddingBuilding = false;
-      _tempRoadPoints.clear();
-      _lastRecordedPoint = null;
-    });
-    
-    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      final locationProvider = Provider.of<LocationProvider>(context, listen: false);
-      if (locationProvider.currentLatLng != null) {
-        _addPointWhileWalking(locationProvider.currentLatLng!);
-      }
-    });
-  }
-
-  void stopRoadRecording() {
-    setState(() {
-      _isRecordingRoad = false;
-    });
-    _recordingTimer?.cancel();
-    _recordingTimer = null;
-  }
-
-  void finishRoadRecording() {
-    if (_tempRoadPoints.length >= 2) {
-      _showRoadDetailsDialog();
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Road must have at least 2 points'),
-          backgroundColor: Colors.red,
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Landmark'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              decoration: const InputDecoration(labelText: 'Landmark Name'),
+              onChanged: (value) => name = value,
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              decoration: const InputDecoration(labelText: 'Landmark Type'),
+              value: type,
+              items: const [
+                DropdownMenuItem(value: 'entrance', child: Text('Entrance')),
+                DropdownMenuItem(value: 'elevator', child: Text('Elevator')),
+                DropdownMenuItem(value: 'stairs', child: Text('Stairs')),
+                DropdownMenuItem(value: 'restroom', child: Text('Restroom')),
+                DropdownMenuItem(value: 'office', child: Text('Office')),
+                DropdownMenuItem(value: 'classroom', child: Text('Classroom')),
+              ],
+              onChanged: (value) => type = value!,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              decoration: const InputDecoration(labelText: 'Description (optional)'),
+              onChanged: (value) => description = value,
+            ),
+          ],
         ),
-      );
-      stopRoadRecording();
-    }
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              setState(() => _isAddingLandmark = false);
+            },
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: name.isNotEmpty ? () {
+              Navigator.of(context).pop();
+              _saveLandmark(point, name, type, description, buildingProvider, roadSystemProvider);
+            } : null,
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
   }
 
-  void _addBuilding(String name, LatLng position, RoadSystemProvider provider) {
-    final currentSystem = provider.currentSystem;
-    
-    if (currentSystem != null) {
-      final newBuilding = Building(
-        id: const Uuid().v4(),
-        name: name,
-        centerPosition: position,
-      );
-      
-      final updatedBuildings = List<Building>.from(currentSystem.buildings)
-        ..add(newBuilding);
-      
-      final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
-      provider.updateCurrentSystem(updatedSystem);
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Building "$name" added successfully'),
-          backgroundColor: Colors.green,
+  void _showBuildingDialog(LatLng point, RoadSystemProvider roadSystemProvider) {
+    String name = '';
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Building'),
+        content: TextField(
+          decoration: const InputDecoration(labelText: 'Building Name'),
+          onChanged: (value) => name = value,
         ),
-      );
-    }
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              setState(() => _isAddingBuilding = false);
+            },
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: name.isNotEmpty ? () {
+              Navigator.of(context).pop();
+              _saveBuilding(point, name, roadSystemProvider);
+            } : null,
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
   }
 
-  void _addLandmark(
-    String name,
-    String type,
-    LatLng position,
-    String description,
-    BuildingProvider buildingProvider,
-    RoadSystemProvider roadSystemProvider,
-  ) {
+  void _showLandmarkInfo(Landmark landmark) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(landmark.name),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Type: ${landmark.type}'),
+            if (landmark.description.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text('Description: ${landmark.description}'),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // SAVE METHODS
+
+  void _saveLandmark(LatLng point, String name, String type, String description, 
+                     BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
     final currentSystem = roadSystemProvider.currentSystem;
     if (currentSystem == null) return;
 
@@ -915,9 +839,9 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
       id: const Uuid().v4(),
       name: name,
       type: type,
-      position: position,
-      description: description,
+      position: point,
       floorId: buildingProvider.isIndoorMode ? (buildingProvider.selectedFloorId ?? '') : '',
+      description: description,
       buildingId: buildingProvider.isIndoorMode ? (buildingProvider.selectedBuildingId ?? '') : '',
     );
 
@@ -928,7 +852,7 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
       
       if (selectedBuilding != null && selectedFloor != null) {
         final updatedLandmarks = List<Landmark>.from(selectedFloor.landmarks)..add(newLandmark);
-        final updatedFloor = selectedFloor.copyWith(landmarks: updatedLandmarks);
+        final updatedFloor = selectedFloor.copyWith(landmarks: updatedLandmarks, buildingId: '');
         
         final updatedFloors = selectedBuilding.floors
             .map((f) => f.id == selectedFloor.id ? updatedFloor : f)
@@ -944,61 +868,59 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
         
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Indoor landmark "$name" added to ${selectedFloor.name}'),
+            content: Text('Landmark "$name" added to ${selectedFloor.name}'),
             backgroundColor: Colors.green,
           ),
         );
       }
     } else {
-      // Add to outdoor landmarks
-      final updatedLandmarks = List<Landmark>.from(currentSystem.outdoorLandmarks)..add(newLandmark);
-      final updatedSystem = currentSystem.copyWith(outdoorLandmarks: updatedLandmarks);
-      
-      roadSystemProvider.updateCurrentSystem(updatedSystem);
-      
+      // Add to ground floor of nearest building or create new building
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Outdoor landmark "$name" added'),
-          backgroundColor: Colors.green,
+        const SnackBar(
+          content: Text('Please select a building and floor to add landmarks'),
+          backgroundColor: Colors.orange,
         ),
       );
     }
+
+    setState(() => _isAddingLandmark = false);
   }
 
-  // PUBLIC INTERFACE FOR CONTROLS
+  void _saveBuilding(LatLng point, String name, RoadSystemProvider roadSystemProvider) {
+    final currentSystem = roadSystemProvider.currentSystem;
+    if (currentSystem == null) return;
 
-  void toggleRecording() {
-    if (_isRecordingRoad) {
-      finishRoadRecording();
-    } else {
-      startRoadRecording();
-    }
+    final newBuilding = Building(
+      id: const Uuid().v4(),
+      name: name,
+      centerPosition: point,
+      floors: [
+        Floor(
+          id: const Uuid().v4(),
+          name: 'Ground Floor',
+          level: 0,
+          buildingId: '', // Will be set after building creation
+        ),
+      ],
+    );
+
+    // Update floor building IDs
+    final updatedFloors = newBuilding.floors.map((floor) => 
+        floor.copyWith(buildingId: newBuilding.id)).toList();
+    final finalBuilding = newBuilding.copyWith(floors: updatedFloors);
+
+    final updatedBuildings = List<Building>.from(currentSystem.buildings)..add(finalBuilding);
+    final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
+    
+    roadSystemProvider.updateCurrentSystem(updatedSystem);
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Building "$name" added'),
+        backgroundColor: Colors.green,
+      ),
+    );
+
+    setState(() => _isAddingBuilding = false);
   }
-
-  void toggleLandmarkMode() {
-    setState(() {
-      _isAddingLandmark = !_isAddingLandmark;
-      if (_isAddingLandmark) {
-        _isAddingBuilding = false;
-        _isRecordingRoad = false;
-      }
-    });
-  }
-
-  void toggleBuildingMode() {
-    setState(() {
-      _isAddingBuilding = !_isAddingBuilding;
-      if (_isAddingBuilding) {
-        _isAddingLandmark = false;
-        _isRecordingRoad = false;
-      }
-    });
-  }
-
-  // GETTERS FOR EXTERNAL ACCESS
-
-  bool get isRecordingRoad => _isRecordingRoad;
-  bool get isAddingLandmark => _isAddingLandmark;
-  bool get isAddingBuilding => _isAddingBuilding;
-  int get tempRoadPointsCount => _tempRoadPoints.length;
 }

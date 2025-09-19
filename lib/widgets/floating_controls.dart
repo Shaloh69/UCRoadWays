@@ -4,7 +4,13 @@ import 'package:flutter_map/flutter_map.dart';
 import '../providers/location_provider.dart';
 import '../providers/building_provider.dart';
 import '../providers/road_system_provider.dart';
+import '../providers/offline_map_provider.dart';
 import '../widgets/map_widget.dart';
+import '../screens/offline_map_screen.dart';
+import '../screens/road_system_manager_screen.dart';
+import '../screens/building_manager_screen.dart';
+import '../screens/navigation_screen.dart';
+import '../screens/road_network_analyze_screen.dart';
 
 class FloatingControls extends StatefulWidget {
   final MapController mapController;
@@ -60,8 +66,8 @@ class _FloatingControlsState extends State<FloatingControls>
 
   @override
   Widget build(BuildContext context) {
-    return Consumer3<LocationProvider, BuildingProvider, RoadSystemProvider>(
-      builder: (context, locationProvider, buildingProvider, roadSystemProvider, child) {
+    return Consumer4<LocationProvider, BuildingProvider, RoadSystemProvider, OfflineMapProvider>(
+      builder: (context, locationProvider, buildingProvider, roadSystemProvider, offlineMapProvider, child) {
         final currentSystem = roadSystemProvider.currentSystem;
         final hasSystem = currentSystem != null;
         
@@ -80,6 +86,10 @@ class _FloatingControlsState extends State<FloatingControls>
                     const SizedBox(height: 8),
                   ],
                   
+                  // Offline status indicator
+                  _buildOfflineStatusButton(offlineMapProvider),
+                  const SizedBox(height: 8),
+                  
                   // Main menu button
                   FloatingActionButton(
                     heroTag: "main_menu",
@@ -88,7 +98,7 @@ class _FloatingControlsState extends State<FloatingControls>
                     child: AnimatedRotation(
                       turns: _isControlsExpanded ? 0.125 : 0,
                       duration: const Duration(milliseconds: 300),
-                      child: Icon(_isControlsExpanded ? Icons.close : Icons.add),
+                      child: Icon(_isControlsExpanded ? Icons.close : Icons.menu),
                     ),
                   ),
                   
@@ -98,15 +108,47 @@ class _FloatingControlsState extends State<FloatingControls>
                     builder: (context, child) {
                       return Transform.scale(
                         scale: _animation.value,
+                        alignment: Alignment.topCenter,
                         child: Opacity(
                           opacity: _animation.value,
-                          child: _isControlsExpanded ? Column(
+                          child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const SizedBox(height: 12),
-                              ..._buildExpandedControls(buildingProvider, hasSystem),
+                              const SizedBox(height: 8),
+                              
+                              // Quick download current area
+                              if (hasSystem && locationProvider.currentLatLng != null)
+                                _buildQuickDownloadButton(offlineMapProvider, locationProvider),
+                              
+                              const SizedBox(height: 8),
+                              
+                              // Navigation to other screens
+                              _buildNavigationButton(),
+                              
+                              const SizedBox(height: 8),
+                              
+                              // Center on location
+                              _buildCenterLocationButton(locationProvider),
+                              
+                              const SizedBox(height: 8),
+                              
+                              // Record road button
+                              if (hasSystem)
+                                _buildRecordButton(),
+                              
+                              const SizedBox(height: 8),
+                              
+                              // Add landmark button
+                              if (hasSystem && buildingProvider.isIndoorMode)
+                                _buildAddLandmarkButton(),
+                              
+                              const SizedBox(height: 8),
+                              
+                              // Add building button
+                              if (hasSystem && !buildingProvider.isIndoorMode)
+                                _buildAddBuildingButton(),
                             ],
-                          ) : const SizedBox.shrink(),
+                          ),
                         ),
                       );
                     },
@@ -115,35 +157,29 @@ class _FloatingControlsState extends State<FloatingControls>
               ),
             ),
             
-            // Location controls
-            Positioned(
-              right: 16,
-              bottom: 200,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildLocationButton(locationProvider),
-                  const SizedBox(height: 8),
-                  _buildZoomControls(),
-                ],
-              ),
-            ),
-            
             // Recording controls (when recording)
             if (_isRecording)
               Positioned(
-                bottom: 120,
-                left: 16,
                 right: 16,
-                child: _buildRecordingControls(),
-              ),
-            
-            // Quick action for indoor mode
-            if (buildingProvider.isIndoorMode)
-              Positioned(
-                left: 16,
-                top: 100,
-                child: _buildIndoorControls(buildingProvider, roadSystemProvider),
+                bottom: 200,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FloatingActionButton(
+                      heroTag: "stop_recording",
+                      onPressed: _stopRecording,
+                      backgroundColor: Colors.red,
+                      child: const Icon(Icons.stop),
+                    ),
+                    const SizedBox(height: 8),
+                    FloatingActionButton.small(
+                      heroTag: "pause_recording",
+                      onPressed: _pauseRecording,
+                      backgroundColor: Colors.orange,
+                      child: const Icon(Icons.pause),
+                    ),
+                  ],
+                ),
               ),
           ],
         );
@@ -152,396 +188,252 @@ class _FloatingControlsState extends State<FloatingControls>
   }
 
   Widget _buildModeToggleButton(BuildingProvider buildingProvider) {
-    return Container(
-      decoration: BoxDecoration(
-        color: buildingProvider.isIndoorMode ? Colors.purple : Colors.green,
-        borderRadius: BorderRadius.circular(25),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(25),
-          onTap: () {
-            buildingProvider.toggleMode();
-            _showModeChangeSnackBar(buildingProvider.isIndoorMode);
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  buildingProvider.isIndoorMode ? Icons.business : Icons.map,
-                  color: Colors.white,
-                  size: 18,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  buildingProvider.isIndoorMode ? 'INDOOR' : 'OUTDOOR',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  List<Widget> _buildExpandedControls(BuildingProvider buildingProvider, bool hasSystem) {
-    if (!hasSystem) {
-      return [
-        _buildControlButton(
-          icon: Icons.warning,
-          label: 'No System',
-          color: Colors.orange,
-          onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Please create or select a road system first')),
-            );
-          },
-        ),
-      ];
-    }
-
-    return [
-      // Road recording controls
-      _buildControlButton(
-        icon: _isRecording ? Icons.stop : Icons.route,
-        label: _isRecording ? 'Stop Recording' : 'Record Road',
-        color: _isRecording ? Colors.red : Colors.blue,
-        onPressed: _toggleRoadRecording,
-      ),
-      const SizedBox(height: 8),
-      
-      // Building controls
-      _buildControlButton(
-        icon: Icons.business,
-        label: 'Add Building',
-        color: Colors.purple,
-        onPressed: () {
-          widget.mapWidgetKey.currentState?.startBuildingMode();
-          _toggleControls();
-        },
-      ),
-      const SizedBox(height: 8),
-      
-      // Landmark controls
-      _buildControlButton(
-        icon: Icons.place,
-        label: buildingProvider.isIndoorMode ? 'Add Indoor Landmark' : 'Add Outdoor Landmark',
-        color: Colors.green,
-        onPressed: () {
-          widget.mapWidgetKey.currentState?.startLandmarkMode();
-          _toggleControls();
-        },
-      ),
-      const SizedBox(height: 8),
-      
-      // Navigation controls
-      _buildControlButton(
-        icon: Icons.navigation,
-        label: 'Start Navigation',
-        color: Colors.orange,
-        onPressed: () {
-          Navigator.pushNamed(context, '/navigation');
-          _toggleControls();
-        },
-      ),
-    ];
-  }
-
-  Widget _buildControlButton({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback onPressed,
-  }) {
-    return Container(
-      width: 56,
-      height: 56,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(28),
-          onTap: onPressed,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: Colors.white, size: 24),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLocationButton(LocationProvider locationProvider) {
-    final isTracking = locationProvider.isTracking;
-    final hasLocation = locationProvider.currentLatLng != null;
-    
     return FloatingActionButton(
-      heroTag: "location",
-      onPressed: () async {
-        if (hasLocation) {
-          widget.mapController.move(locationProvider.currentLatLng!, 20.0);
-        } else {
-          await locationProvider.getCurrentLocation();
-          if (locationProvider.currentLatLng != null) {
-            widget.mapController.move(locationProvider.currentLatLng!, 20.0);
-          }
-        }
+      heroTag: "mode_toggle",
+      onPressed: () {
+        buildingProvider.toggleMode();
       },
-      backgroundColor: isTracking ? Colors.blue : Colors.grey,
+      backgroundColor: buildingProvider.isIndoorMode ? Colors.purple : Colors.green,
       child: Icon(
-        hasLocation ? Icons.my_location : Icons.location_searching,
-        color: Colors.white,
+        buildingProvider.isIndoorMode ? Icons.business : Icons.landscape,
       ),
     );
   }
 
-  Widget _buildZoomControls() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        FloatingActionButton(
-          heroTag: "zoom_in",
-          mini: true,
-          onPressed: () {
-            final currentZoom = widget.mapController.camera.zoom;
-            widget.mapController.move(
-              widget.mapController.camera.center,
-              (currentZoom + 1).clamp(10.0, 22.0),
-            );
-          },
-          backgroundColor: Colors.white,
-          foregroundColor: Colors.black,
-          child: const Icon(Icons.add),
-        ),
-        const SizedBox(height: 4),
-        FloatingActionButton(
-          heroTag: "zoom_out",
-          mini: true,
-          onPressed: () {
-            final currentZoom = widget.mapController.camera.zoom;
-            widget.mapController.move(
-              widget.mapController.camera.center,
-              (currentZoom - 1).clamp(10.0, 22.0),
-            );
-          },
-          backgroundColor: Colors.white,
-          foregroundColor: Colors.black,
-          child: const Icon(Icons.remove),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildRecordingControls() {
-    return Card(
-      color: Colors.red,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            const Icon(Icons.fiber_manual_record, color: Colors.white),
-            const SizedBox(width: 12),
-            const Expanded(
-              child: Text(
-                'Recording Road Path...',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            TextButton(
-              onPressed: () {
-                widget.mapWidgetKey.currentState?.finishRoadRecording();
-                setState(() {
-                  _isRecording = false;
-                });
-              },
-              child: const Text(
-                'FINISH',
-                style: TextStyle(color: Colors.white),
-              ),
-            ),
-            const SizedBox(width: 8),
-            TextButton(
-              onPressed: () {
-                widget.mapWidgetKey.currentState?.stopRoadRecording();
-                setState(() {
-                  _isRecording = false;
-                });
-              },
-              child: const Text(
-                'CANCEL',
-                style: TextStyle(color: Colors.white),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildIndoorControls(BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
-    final building = buildingProvider.getSelectedBuilding(roadSystemProvider.currentSystem);
-    final floor = buildingProvider.getSelectedFloor(roadSystemProvider.currentSystem);
-    
-    return Card(
-      color: Colors.purple[100],
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.business, color: Colors.purple[800], size: 20),
-                const SizedBox(width: 6),
-                Text(
-                  'INDOOR MODE',
-                  style: TextStyle(
-                    color: Colors.purple[800],
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-            if (building != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                building.name,
-                style: TextStyle(
-                  color: Colors.purple[900],
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              if (floor != null)
-                Text(
-                  buildingProvider.getFloorDisplayName(floor),
-                  style: TextStyle(
-                    color: Colors.purple[700],
-                    fontSize: 12,
-                  ),
-                ),
-            ],
-            const SizedBox(height: 8),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildSmallButton(
-                  icon: Icons.layers,
-                  tooltip: 'Switch Floor',
-                  onPressed: () => _showFloorSelector(buildingProvider, roadSystemProvider),
-                ),
-                const SizedBox(width: 4),
-                _buildSmallButton(
-                  icon: Icons.exit_to_app,
-                  tooltip: 'Exit to Outdoor',
-                  onPressed: () {
-                    buildingProvider.goOutdoor();
-                    _showModeChangeSnackBar(false);
-                  },
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSmallButton({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback onPressed,
-  }) {
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: Colors.purple[200],
-        borderRadius: BorderRadius.circular(16),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: onPressed,
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Icon(icon, size: 16, color: Colors.purple[800]),
+  Widget _buildOfflineStatusButton(OfflineMapProvider offlineMapProvider) {
+    return FloatingActionButton.small(
+      heroTag: "offline_status",
+      onPressed: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => const OfflineMapScreen(),
           ),
-        ),
+        );
+      },
+      backgroundColor: offlineMapProvider.preferOffline 
+          ? (offlineMapProvider.isDownloading ? Colors.orange : Colors.green)
+          : Colors.grey,
+      child: Stack(
+        children: [
+          Icon(
+            offlineMapProvider.preferOffline 
+                ? Icons.offline_pin 
+                : Icons.cloud,
+            size: 20,
+          ),
+          if (offlineMapProvider.isDownloading)
+            Positioned(
+              bottom: 0,
+              right: 0,
+              child: Container(
+                width: 8,
+                height: 8,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
 
-  void _toggleRoadRecording() {
-    setState(() {
-      _isRecording = !_isRecording;
-    });
-    
-    if (_isRecording) {
-      widget.mapWidgetKey.currentState?.startRoadRecording();
-      _toggleControls(); // Close the menu
-    } else {
-      widget.mapWidgetKey.currentState?.stopRoadRecording();
-    }
+  Widget _buildQuickDownloadButton(OfflineMapProvider offlineMapProvider, LocationProvider locationProvider) {
+    return FloatingActionButton.small(
+      heroTag: "quick_download",
+      onPressed: offlineMapProvider.isDownloading ? null : () {
+        _showQuickDownloadDialog(offlineMapProvider, locationProvider);
+      },
+      backgroundColor: offlineMapProvider.isDownloading ? Colors.grey : Colors.blue,
+      child: Icon(
+        offlineMapProvider.isDownloading ? Icons.downloading : Icons.download,
+        size: 20,
+      ),
+    );
   }
 
-  void _showModeChangeSnackBar(bool isIndoor) {
+  Widget _buildCenterLocationButton(LocationProvider locationProvider) {
+    return FloatingActionButton.small(
+      heroTag: "center_location",
+      onPressed: locationProvider.currentLatLng != null ? () {
+        widget.mapController.move(
+          locationProvider.currentLatLng!,
+          widget.mapController.camera.zoom,
+        );
+      } : null,
+      backgroundColor: locationProvider.currentLatLng != null ? Colors.blue : Colors.grey,
+      child: const Icon(Icons.my_location, size: 20),
+    );
+  }
+
+  Widget _buildRecordButton() {
+    return FloatingActionButton.small(
+      heroTag: "record_road",
+      onPressed: _isRecording ? null : _startRecording,
+      backgroundColor: _isRecording ? Colors.grey : Colors.red,
+      child: Icon(
+        _isRecording ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+        size: 20,
+      ),
+    );
+  }
+
+  Widget _buildAddLandmarkButton() {
+    return FloatingActionButton.small(
+      heroTag: "add_landmark",
+      onPressed: () {
+        widget.mapWidgetKey.currentState?.startAddingLandmark();
+        _toggleControls();
+      },
+      backgroundColor: Colors.green,
+      child: const Icon(Icons.place, size: 20),
+    );
+  }
+
+  Widget _buildAddBuildingButton() {
+    return FloatingActionButton.small(
+      heroTag: "add_building",
+      onPressed: () {
+        widget.mapWidgetKey.currentState?.startAddingBuilding();
+        _toggleControls();
+      },
+      backgroundColor: Colors.purple,
+      child: const Icon(Icons.business, size: 20),
+    );
+  }
+
+  void _startRecording() {
+    setState(() {
+      _isRecording = true;
+    });
+    widget.mapWidgetKey.currentState?.startRoadRecording();
+    _toggleControls();
+  }
+
+  void _stopRecording() {
+    setState(() {
+      _isRecording = false;
+    });
+    widget.mapWidgetKey.currentState?.stopRoadRecording();
+  }
+
+  void _pauseRecording() {
+    // Implement pause functionality if needed
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(
-              isIndoor ? Icons.business : Icons.map,
-              color: Colors.white,
+      const SnackBar(
+        content: Text('Recording paused'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _showQuickDownloadDialog(OfflineMapProvider offlineMapProvider, LocationProvider locationProvider) {
+    double radius = 1.0;
+    
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Download Current Area'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Download offline maps for the current area'),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  const Text('Radius: '),
+                  Expanded(
+                    child: Slider(
+                      value: radius,
+                      min: 0.5,
+                      max: 5.0,
+                      divisions: 9,
+                      label: '${radius.toStringAsFixed(1)} km',
+                      onChanged: (value) {
+                        setState(() {
+                          radius = value;
+                        });
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              Text(
+                'Estimated size: ${_getEstimatedSize(radius)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
             ),
-            const SizedBox(width: 8),
-            Text('Switched to ${isIndoor ? 'Indoor' : 'Outdoor'} mode'),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                _toggleControls();
+                
+                try {
+                  final regionName = 'Current_Area_${DateTime.now().millisecondsSinceEpoch}';
+                  await offlineMapProvider.downloadCurrentView(
+                    center: locationProvider.currentLatLng!,
+                    zoom: widget.mapController.camera.zoom,
+                    regionName: regionName,
+                    radiusKm: radius,
+                  );
+                  
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Downloaded $regionName successfully'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Download failed: $e'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              },
+              child: const Text('Download'),
+            ),
           ],
         ),
-        backgroundColor: isIndoor ? Colors.purple : Colors.green,
-        duration: const Duration(seconds: 2),
       ),
     );
   }
 
-  void _showFloorSelector(BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
-    final building = buildingProvider.getSelectedBuilding(roadSystemProvider.currentSystem);
-    if (building == null || building.floors.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No floors available in this building')),
-      );
-      return;
+  String _getEstimatedSize(double radius) {
+    // Rough estimation: 1km radius ≈ 2MB at zoom levels 10-18
+    final estimatedMB = (radius * radius * 2).round();
+    if (estimatedMB < 1) {
+      return '< 1 MB';
+    } else {
+      return '$estimatedMB MB';
     }
+  }
 
+  Widget _buildNavigationButton() {
+    return FloatingActionButton.small(
+      heroTag: "navigation_menu",
+      onPressed: () {
+        _showNavigationMenu();
+      },
+      backgroundColor: Colors.purple,
+      child: const Icon(Icons.apps, size: 20),
+    );
+  }
+
+  void _showNavigationMenu() {
     showModalBottomSheet(
       context: context,
       builder: (context) => Container(
@@ -549,62 +441,71 @@ class _FloatingControlsState extends State<FloatingControls>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              children: [
-                Icon(Icons.layers, color: Colors.purple[800]),
-                const SizedBox(width: 8),
-                Text(
-                  'Select Floor - ${building.name}',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
+            const Text(
+              'Navigate to...',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
-            ...buildingProvider.getSortedFloorsForBuilding(building).map(
-              (floor) => ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: buildingProvider.selectedFloorId == floor.id 
-                      ? Colors.purple 
-                      : Colors.grey[300],
-                  child: Text(
-                    floor.level.toString(),
-                    style: TextStyle(
-                      color: buildingProvider.selectedFloorId == floor.id 
-                          ? Colors.white 
-                          : Colors.black,
-                      fontWeight: FontWeight.bold,
-                    ),
+            ListTile(
+              leading: const Icon(Icons.map),
+              title: const Text('Road Systems'),
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const RoadSystemManagerScreen(),
                   ),
-                ),
-                title: Text(buildingProvider.getFloorDisplayName(floor)),
-                subtitle: Text('${floor.roads.length} roads, ${floor.landmarks.length} landmarks'),
-                trailing: buildingProvider.selectedFloorId == floor.id 
-                    ? const Icon(Icons.check_circle, color: Colors.purple)
-                    : null,
-                onTap: () {
-                  buildingProvider.selectFloor(floor.id);
-                  Navigator.pop(context);
-                  
-                  // Center map on floor
-                  if (floor.centerPosition != null) {
-                    widget.mapController.move(floor.centerPosition!, 21.0);
-                  }
-                  
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Switched to ${floor.name}'),
-                      backgroundColor: Colors.purple,
-                    ),
-                  );
-                },
-              ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.business),
+              title: const Text('Buildings'),
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const BuildingManagerScreen(),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.navigation),
+              title: const Text('Navigation'),
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const NavigationScreen(),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.analytics),
+              title: const Text('Network Analysis'),
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const RoadNetworkAnalyzerScreen(),
+                  ),
+                );
+              },
             ),
           ],
         ),
       ),
     );
+  String _getEstimatedSize(double radius) {
+    // Rough estimation: 1km radius ≈ 2MB at zoom levels 10-18
+    final estimatedMB = (radius * radius * 2).round();
+    if (estimatedMB < 1) {
+      return '< 1 MB';
+    } else {
+      return '$estimatedMB MB';
+    }
   }
 }
+    }

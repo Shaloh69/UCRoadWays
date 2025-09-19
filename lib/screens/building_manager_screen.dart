@@ -803,7 +803,7 @@ class _BuildingManagerScreenState extends State<BuildingManagerScreen>
     final currentSystem = roadSystemProvider.currentSystem;
     
     if (currentSystem != null) {
-      final updatedFloor = floor.copyWith(name: name, level: level);
+      final updatedFloor = floor.copyWith(name: name, level: level, buildingId: '');
       
       final updatedFloors = building.floors
           .map((f) => f.id == floor.id ? updatedFloor : f)

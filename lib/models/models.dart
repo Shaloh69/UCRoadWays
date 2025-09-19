@@ -154,7 +154,7 @@ class Floor {
     List<Landmark>? landmarks,
     List<String>? connectedFloors,
     LatLng? centerPosition,
-    Map<String, dynamic>? properties,
+    Map<String, dynamic>? properties, required String buildingId,
   }) {
     return Floor(
       id: id,
