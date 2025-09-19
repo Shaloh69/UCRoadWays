@@ -1,8 +1,7 @@
-import 'dart:async';
-import 'dart:math';
-import 'package:flutter/material.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'dart:convert';
 import '../models/models.dart';
 import '../services/services.dart';
 
@@ -11,493 +10,561 @@ class RoadSystemProvider extends ChangeNotifier {
   RoadSystem? _currentSystem;
   bool _isLoading = false;
   String? _error;
+  final DataStorageService _storageService = DataStorageService();
 
+  // Getters
   List<RoadSystem> get roadSystems => _roadSystems;
   RoadSystem? get currentSystem => _currentSystem;
   bool get isLoading => _isLoading;
   String? get error => _error;
+  bool get hasCurrentSystem => _currentSystem != null;
 
-  Future<void> loadRoadSystems() async {
-    _isLoading = true;
-    _error = null;
-    notifyListeners();
-
-    try {
-      _roadSystems = await DataStorageService.loadRoadSystems();
-      
-      final currentSystemId = await DataStorageService.getCurrentRoadSystemId();
-      if (currentSystemId != null && _roadSystems.isNotEmpty) {
-        try {
-          _currentSystem = _roadSystems.firstWhere(
-            (system) => system.id == currentSystemId,
-          );
-        } catch (e) {
-          // If system with that ID not found, use first available
-          _currentSystem = _roadSystems.first;
-        }
-      } else if (_roadSystems.isNotEmpty) {
-        _currentSystem = _roadSystems.first;
-      }
-    } catch (e) {
-      _error = e.toString();
-    }
-
-    _isLoading = false;
-    notifyListeners();
+  // Constructor
+  RoadSystemProvider() {
+    _initialize();
   }
 
-  Future<void> createNewRoadSystem(String name, LatLng centerPosition) async {
+  Future<void> _initialize() async {
+    await loadRoadSystems();
+  }
+
+  // Load road systems from storage
+  Future<void> loadRoadSystems() async {
+    try {
+      _setLoading(true);
+      _clearError();
+      
+      final prefs = await SharedPreferences.getInstance();
+      final systemIds = prefs.getStringList('road_system_ids') ?? [];
+      final currentSystemId = prefs.getString('current_system_id');
+      
+      _roadSystems.clear();
+      
+      for (final id in systemIds) {
+        try {
+          final systemData = prefs.getString('road_system_$id');
+          if (systemData != null) {
+            final systemJson = json.decode(systemData);
+            final system = RoadSystem.fromJson(systemJson);
+            _roadSystems.add(system);
+            
+            // Set current system if it matches
+            if (currentSystemId == id) {
+              _currentSystem = system;
+            }
+          }
+        } catch (e) {
+          debugPrint('Error loading road system $id: $e');
+          // Remove corrupted system ID
+          systemIds.remove(id);
+          prefs.remove('road_system_$id');
+        }
+      }
+      
+      // Update the clean system IDs list
+      await prefs.setStringList('road_system_ids', systemIds);
+      
+      // If no current system but systems exist, set the first one
+      if (_currentSystem == null && _roadSystems.isNotEmpty) {
+        _currentSystem = _roadSystems.first;
+        await prefs.setString('current_system_id', _currentSystem!.id);
+      }
+      
+    } catch (e) {
+      _setError('Failed to load road systems: $e');
+      debugPrint('Error in loadRoadSystems: $e');
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  // Save road systems to storage
+  Future<void> saveRoadSystems() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final systemIds = _roadSystems.map((s) => s.id).toList();
+      
+      await prefs.setStringList('road_system_ids', systemIds);
+      
+      for (final system in _roadSystems) {
+        final systemJson = json.encode(system.toJson());
+        await prefs.setString('road_system_${system.id}', systemJson);
+      }
+      
+      if (_currentSystem != null) {
+        await prefs.setString('current_system_id', _currentSystem!.id);
+      }
+      
+    } catch (e) {
+      _setError('Failed to save road systems: $e');
+      debugPrint('Error in saveRoadSystems: $e');
+    }
+  }
+
+  // Create a new road system
+  Future<RoadSystem> createRoadSystem(String name, LatLng centerPosition) async {
     try {
       final newSystem = RoadSystem(
         id: const Uuid().v4(),
         name: name,
         centerPosition: centerPosition,
+        zoom: 18.0,
       );
-
+      
       _roadSystems.add(newSystem);
       _currentSystem = newSystem;
       
-      await _saveRoadSystems();
-      await DataStorageService.setCurrentRoadSystem(newSystem.id);
+      await saveRoadSystems();
+      notifyListeners();
       
-      notifyListeners();
+      return newSystem;
     } catch (e) {
-      _error = e.toString();
-      notifyListeners();
+      _setError('Failed to create road system: $e');
+      rethrow;
     }
   }
 
-  Future<void> updateCurrentSystem(RoadSystem updatedSystem) async {
-    if (_currentSystem == null) return;
-
+  // Set current system
+  Future<void> setCurrentSystem(String systemId) async {
     try {
-      final index = _roadSystems.indexWhere((system) => system.id == updatedSystem.id);
+      final system = _roadSystems.where((s) => s.id == systemId).firstOrNull;
+      if (system != null) {
+        _currentSystem = system;
+        
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('current_system_id', systemId);
+        
+        notifyListeners();
+      }
+    } catch (e) {
+      _setError('Failed to set current system: $e');
+    }
+  }
+
+  // Update current system
+  Future<void> updateCurrentSystem(RoadSystem updatedSystem) async {
+    try {
+      if (_currentSystem == null || updatedSystem.id != _currentSystem!.id) {
+        throw Exception('Cannot update: system ID mismatch');
+      }
+      
+      // Update in the list
+      final index = _roadSystems.indexWhere((s) => s.id == updatedSystem.id);
       if (index != -1) {
         _roadSystems[index] = updatedSystem;
         _currentSystem = updatedSystem;
-        await _saveRoadSystems();
+        
+        await saveRoadSystems();
         notifyListeners();
+      } else {
+        throw Exception('System not found in list');
       }
     } catch (e) {
-      _error = e.toString();
-      notifyListeners();
+      _setError('Failed to update system: $e');
+      debugPrint('Error updating system: $e');
     }
   }
 
-  Future<void> setCurrentSystem(String systemId) async {
+  // Update a specific system
+  Future<void> updateRoadSystem(RoadSystem updatedSystem) async {
     try {
-      final system = _roadSystems.firstWhere((s) => s.id == systemId);
-      _currentSystem = system;
-      await DataStorageService.setCurrentRoadSystem(systemId);
-      notifyListeners();
+      final index = _roadSystems.indexWhere((s) => s.id == updatedSystem.id);
+      if (index != -1) {
+        _roadSystems[index] = updatedSystem;
+        
+        // Update current system if it's the same
+        if (_currentSystem?.id == updatedSystem.id) {
+          _currentSystem = updatedSystem;
+        }
+        
+        await saveRoadSystems();
+        notifyListeners();
+      } else {
+        throw Exception('System not found');
+      }
     } catch (e) {
-      _error = e.toString();
-      notifyListeners();
+      _setError('Failed to update system: $e');
     }
   }
 
+  // Delete a road system
   Future<void> deleteRoadSystem(String systemId) async {
     try {
-      _roadSystems.removeWhere((system) => system.id == systemId);
+      _roadSystems.removeWhere((s) => s.id == systemId);
       
+      // Clear current system if it was deleted
       if (_currentSystem?.id == systemId) {
         _currentSystem = _roadSystems.isNotEmpty ? _roadSystems.first : null;
-        if (_currentSystem != null) {
-          await DataStorageService.setCurrentRoadSystem(_currentSystem!.id);
-        }
       }
       
-      await _saveRoadSystems();
+      // Remove from storage
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('road_system_$systemId');
+      
+      await saveRoadSystems();
       notifyListeners();
     } catch (e) {
-      _error = e.toString();
-      notifyListeners();
+      _setError('Failed to delete system: $e');
     }
   }
 
-  Future<String?> exportCurrentSystem() async {
-    if (_currentSystem == null) return null;
-    
+  // Duplicate a road system
+  Future<RoadSystem> duplicateRoadSystem(String systemId, String newName) async {
     try {
-      return await DataStorageService.exportRoadSystemToJson(_currentSystem!);
-    } catch (e) {
-      _error = e.toString();
-      notifyListeners();
-      return null;
-    }
-  }
-
-  Future<void> importRoadSystem() async {
-    try {
-      final importedSystem = await DataStorageService.importRoadSystemFromJson();
-      if (importedSystem != null) {
-        _roadSystems.add(importedSystem);
-        _currentSystem = importedSystem;
-        await _saveRoadSystems();
-        await DataStorageService.setCurrentRoadSystem(importedSystem.id);
-        notifyListeners();
+      final originalSystem = _roadSystems.where((s) => s.id == systemId).firstOrNull;
+      if (originalSystem == null) {
+        throw Exception('Original system not found');
       }
-    } catch (e) {
-      _error = e.toString();
-      notifyListeners();
-    }
-  }
-
-  // ROAD MANAGEMENT METHODS
-  void addRoadToCurrentSystem(Road road) {
-    if (_currentSystem == null) return;
-
-    final updatedRoads = List<Road>.from(_currentSystem!.outdoorRoads)..add(road);
-    final updatedSystem = _currentSystem!.copyWith(outdoorRoads: updatedRoads);
-    updateCurrentSystem(updatedSystem);
-  }
-
-  void updateRoadInCurrentSystem(Road updatedRoad) {
-    if (_currentSystem == null) return;
-
-    final roads = List<Road>.from(_currentSystem!.outdoorRoads);
-    final index = roads.indexWhere((road) => road.id == updatedRoad.id);
-    if (index != -1) {
-      roads[index] = updatedRoad;
-      final updatedSystem = _currentSystem!.copyWith(outdoorRoads: roads);
-      updateCurrentSystem(updatedSystem);
-    }
-  }
-
-  void removeRoadFromCurrentSystem(String roadId) {
-    if (_currentSystem == null) return;
-
-    final updatedRoads = _currentSystem!.outdoorRoads
-        .where((road) => road.id != roadId)
-        .toList();
-    final updatedSystem = _currentSystem!.copyWith(outdoorRoads: updatedRoads);
-    updateCurrentSystem(updatedSystem);
-  }
-
-  // NEW: INTERSECTION MANAGEMENT METHODS
-  void addIntersectionToCurrentSystem(Intersection intersection) {
-    if (_currentSystem == null) return;
-
-    final updatedIntersections = List<Intersection>.from(_currentSystem!.outdoorIntersections)
-      ..add(intersection);
-    final updatedSystem = _currentSystem!.copyWith(outdoorIntersections: updatedIntersections);
-    updateCurrentSystem(updatedSystem);
-  }
-
-  void updateIntersectionInCurrentSystem(Intersection updatedIntersection) {
-    if (_currentSystem == null) return;
-
-    final intersections = List<Intersection>.from(_currentSystem!.outdoorIntersections);
-    final index = intersections.indexWhere((intersection) => intersection.id == updatedIntersection.id);
-    if (index != -1) {
-      intersections[index] = updatedIntersection;
-      final updatedSystem = _currentSystem!.copyWith(outdoorIntersections: intersections);
-      updateCurrentSystem(updatedSystem);
-    }
-  }
-
-  void removeIntersectionFromCurrentSystem(String intersectionId) {
-    if (_currentSystem == null) return;
-
-    final updatedIntersections = _currentSystem!.outdoorIntersections
-        .where((intersection) => intersection.id != intersectionId)
-        .toList();
-    final updatedSystem = _currentSystem!.copyWith(outdoorIntersections: updatedIntersections);
-    updateCurrentSystem(updatedSystem);
-  }
-
-  // NEW: ROAD CONNECTION METHODS
-  List<Road> getConnectableRoads(LatLng point, {double maxDistance = 10.0}) {
-    if (_currentSystem == null) return [];
-
-    final connectableRoads = <Road>[];
-    
-    for (final road in _currentSystem!.outdoorRoads) {
-      if (_isPointNearRoad(point, road, maxDistance)) {
-        connectableRoads.add(road);
-      }
-    }
-    
-    return connectableRoads;
-  }
-
-  bool _isPointNearRoad(LatLng point, Road road, double maxDistance) {
-    for (int i = 0; i < road.points.length - 1; i++) {
-      final distance = _distanceToLineSegment(point, road.points[i], road.points[i + 1]);
-      if (distance <= maxDistance) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  double _distanceToLineSegment(LatLng point, LatLng lineStart, LatLng lineEnd) {
-    const double earthRadius = 6371000; // Earth's radius in meters
-    
-    // Convert to radians
-    final lat1 = point.latitude * (3.14159 / 180);
-    final lng1 = point.longitude * (3.14159 / 180);
-    final lat2 = lineStart.latitude * (3.14159 / 180);
-    final lng2 = lineStart.longitude * (3.14159 / 180);
-    final lat3 = lineEnd.latitude * (3.14159 / 180);
-    final lng3 = lineEnd.longitude * (3.14159 / 180);
-    
-    // Simplified distance calculation for small distances
-    final dx1 = (lng2 - lng1) * earthRadius * cos(lat1);
-    final dy1 = (lat2 - lat1) * earthRadius;
-    final dx2 = (lng3 - lng1) * earthRadius * cos(lat1);
-    final dy2 = (lat3 - lat1) * earthRadius;
-    final dx3 = (lng3 - lng2) * earthRadius * cos(lat2);
-    final dy3 = (lat3 - lat2) * earthRadius;
-    
-    final lineLengthSquared = dx3 * dx3 + dy3 * dy3;
-    
-    if (lineLengthSquared == 0) {
-      return sqrt(dx1 * dx1 + dy1 * dy1);
-    }
-    
-    final t = ((dx1 - dx2) * dx3 + (dy1 - dy2) * dy3) / lineLengthSquared;
-    final clampedT = t.clamp(0.0, 1.0);
-    
-    final projX = dx2 + clampedT * dx3;
-    final projY = dy2 + clampedT * dy3;
-    
-    final distX = dx1 - projX;
-    final distY = dy1 - projY;
-    
-    return sqrt(distX * distX + distY * distY);
-  }
-
-  Future<void> connectRoads(List<String> roadIds, LatLng connectionPoint) async {
-    if (_currentSystem == null || roadIds.length < 2) return;
-
-    try {
-      // Create intersection at connection point
-      final intersection = Intersection(
+      
+      // Create a deep copy with new ID
+      final duplicatedSystem = RoadSystem(
         id: const Uuid().v4(),
-        name: 'Auto Intersection ${roadIds.length} roads',
-        position: connectionPoint,
-        floorId: '', // Outdoor intersection
-        connectedRoadIds: roadIds,
-        type: 'simple',
-        properties: {
-          'auto_generated': true,
-          'created': DateTime.now().toIso8601String(),
-          'connected_roads': roadIds,
-        },
+        name: newName,
+        buildings: _duplicateBuildings(originalSystem.buildings),
+        outdoorRoads: _duplicateRoads(originalSystem.outdoorRoads),
+        outdoorLandmarks: _duplicateLandmarks(originalSystem.outdoorLandmarks),
+        outdoorIntersections: _duplicateIntersections(originalSystem.outdoorIntersections),
+        centerPosition: originalSystem.centerPosition,
+        zoom: originalSystem.zoom,
+        properties: Map<String, dynamic>.from(originalSystem.properties),
       );
-
-      // Add intersection to system
-      addIntersectionToCurrentSystem(intersection);
-
-      // Update roads to reference this intersection
-      final updatedRoads = _currentSystem!.outdoorRoads.map((road) {
-        if (roadIds.contains(road.id)) {
-          final updatedConnections = List<String>.from(road.connectedIntersections);
-          if (!updatedConnections.contains(intersection.id)) {
-            updatedConnections.add(intersection.id);
-          }
-          return road.copyWith(connectedIntersections: updatedConnections);
-        }
-        return road;
-      }).toList();
-
-      final updatedSystem = _currentSystem!.copyWith(outdoorRoads: updatedRoads);
-      await updateCurrentSystem(updatedSystem);
-
-    } catch (e) {
-      _error = e.toString();
+      
+      _roadSystems.add(duplicatedSystem);
+      await saveRoadSystems();
       notifyListeners();
+      
+      return duplicatedSystem;
+    } catch (e) {
+      _setError('Failed to duplicate system: $e');
+      rethrow;
     }
   }
 
-  // NEW: SMART ROAD CONNECTION ANALYSIS
-  Map<String, dynamic> analyzeRoadNetwork() {
-    if (_currentSystem == null) return {};
+  // Helper methods for duplication
+  List<Building> _duplicateBuildings(List<Building> buildings) {
+    return buildings.map((building) => Building(
+      id: const Uuid().v4(),
+      name: building.name,
+      centerPosition: building.centerPosition,
+      boundaryPoints: List<LatLng>.from(building.boundaryPoints),
+      floors: _duplicateFloors(building.floors),
+      entranceFloorIds: List<String>.from(building.entranceFloorIds),
+      defaultFloorLevel: building.defaultFloorLevel,
+      properties: Map<String, dynamic>.from(building.properties),
+    )).toList();
+  }
 
-    final analysis = <String, dynamic>{};
-    
-    // Count total elements
-    analysis['total_roads'] = _currentSystem!.outdoorRoads.length;
-    analysis['total_intersections'] = _currentSystem!.outdoorIntersections.length;
-    analysis['total_buildings'] = _currentSystem!.buildings.length;
-    
-    // Analyze road connections
-    int connectedRoads = 0;
-    int isolatedRoads = 0;
-    
-    for (final road in _currentSystem!.outdoorRoads) {
-      if (road.connectedIntersections.isNotEmpty) {
-        connectedRoads++;
-      } else {
-        isolatedRoads++;
-      }
+  List<Floor> _duplicateFloors(List<Floor> floors) {
+    return floors.map((floor) => Floor(
+      id: const Uuid().v4(),
+      name: floor.name,
+      level: floor.level,
+      buildingId: floor.buildingId, // This will be updated when building is created
+      roads: _duplicateRoads(floor.roads),
+      landmarks: _duplicateLandmarks(floor.landmarks),
+      connectedFloors: List<String>.from(floor.connectedFloors),
+      centerPosition: floor.centerPosition,
+      properties: Map<String, dynamic>.from(floor.properties),
+    )).toList();
+  }
+
+  List<Road> _duplicateRoads(List<Road> roads) {
+    return roads.map((road) => Road(
+      id: const Uuid().v4(),
+      name: road.name,
+      points: List<LatLng>.from(road.points),
+      type: road.type,
+      width: road.width,
+      isOneWay: road.isOneWay,
+      floorId: road.floorId, // This will be updated when floor is created
+      connectedIntersections: List<String>.from(road.connectedIntersections),
+      properties: Map<String, dynamic>.from(road.properties),
+    )).toList();
+  }
+
+  List<Landmark> _duplicateLandmarks(List<Landmark> landmarks) {
+    return landmarks.map((landmark) => Landmark(
+      id: const Uuid().v4(),
+      name: landmark.name,
+      type: landmark.type,
+      position: landmark.position,
+      floorId: landmark.floorId, // This will be updated when floor is created
+      description: landmark.description,
+      connectedFloors: List<String>.from(landmark.connectedFloors),
+      buildingId: landmark.buildingId, // This will be updated when building is created
+      properties: Map<String, dynamic>.from(landmark.properties),
+    )).toList();
+  }
+
+  List<Intersection> _duplicateIntersections(List<Intersection> intersections) {
+    return intersections.map((intersection) => Intersection(
+      id: const Uuid().v4(),
+      name: intersection.name,
+      position: intersection.position,
+      floorId: intersection.floorId,
+      connectedRoadIds: List<String>.from(intersection.connectedRoadIds),
+      type: intersection.type,
+      properties: Map<String, dynamic>.from(intersection.properties),
+    )).toList();
+  }
+
+  // Import road system from JSON
+  Future<RoadSystem> importFromJson(String jsonString) async {
+    try {
+      final systemData = json.decode(jsonString);
+      final system = RoadSystem.fromJson(systemData);
+      
+      // Ensure unique ID
+      final importedSystem = RoadSystem(
+        id: const Uuid().v4(),
+        name: '${system.name} (Imported)',
+        buildings: system.buildings,
+        outdoorRoads: system.outdoorRoads,
+        outdoorLandmarks: system.outdoorLandmarks,
+        outdoorIntersections: system.outdoorIntersections,
+        centerPosition: system.centerPosition,
+        zoom: system.zoom,
+        properties: system.properties,
+      );
+      
+      _roadSystems.add(importedSystem);
+      await saveRoadSystems();
+      notifyListeners();
+      
+      return importedSystem;
+    } catch (e) {
+      _setError('Failed to import system: $e');
+      rethrow;
     }
+  }
+
+  // Export road system to JSON
+  String exportToJson(String systemId) {
+    try {
+      final system = _roadSystems.where((s) => s.id == systemId).firstOrNull;
+      if (system == null) {
+        throw Exception('System not found');
+      }
+      
+      return json.encode(system.toJson());
+    } catch (e) {
+      _setError('Failed to export system: $e');
+      rethrow;
+    }
+  }
+
+  // Get system statistics
+  Map<String, dynamic> getSystemStatistics(String systemId) {
+    final system = _roadSystems.where((s) => s.id == systemId).firstOrNull;
+    if (system == null) return {};
     
-    analysis['connected_roads'] = connectedRoads;
-    analysis['isolated_roads'] = isolatedRoads;
-    analysis['connectivity_percentage'] = 
-        _currentSystem!.outdoorRoads.isNotEmpty 
-            ? (connectedRoads / _currentSystem!.outdoorRoads.length * 100).round()
-            : 0;
+    final totalFloors = system.buildings.fold<int>(0, (sum, building) => sum + building.floors.length);
+    final totalIndoorRoads = system.buildings
+        .expand((b) => b.floors)
+        .fold<int>(0, (sum, floor) => sum + floor.roads.length);
+    final totalIndoorLandmarks = system.buildings
+        .expand((b) => b.floors)
+        .fold<int>(0, (sum, floor) => sum + floor.landmarks.length);
     
-    // Find potential connection points
-    final potentialConnections = <Map<String, dynamic>>[];
+    return {
+      'buildings': system.buildings.length,
+      'floors': totalFloors,
+      'outdoorRoads': system.outdoorRoads.length,
+      'indoorRoads': totalIndoorRoads,
+      'totalRoads': system.outdoorRoads.length + totalIndoorRoads,
+      'outdoorLandmarks': system.outdoorLandmarks.length,
+      'indoorLandmarks': totalIndoorLandmarks,
+      'totalLandmarks': system.outdoorLandmarks.length + totalIndoorLandmarks,
+      'intersections': system.outdoorIntersections.length,
+    };
+  }
+
+  // Search functionality
+  List<Map<String, dynamic>> searchAll(String query) {
+    if (_currentSystem == null || query.isEmpty) return [];
     
-    for (int i = 0; i < _currentSystem!.outdoorRoads.length; i++) {
-      for (int j = i + 1; j < _currentSystem!.outdoorRoads.length; j++) {
-        final road1 = _currentSystem!.outdoorRoads[i];
-        final road2 = _currentSystem!.outdoorRoads[j];
-        
-        final connectionPoint = _findNearestConnectionPoint(road1, road2);
-        if (connectionPoint != null) {
-          potentialConnections.add({
-            'road1_id': road1.id,
-            'road1_name': road1.name,
-            'road2_id': road2.id,
-            'road2_name': road2.name,
-            'connection_point': connectionPoint,
-            'distance': _calculateMinimumDistance(road1, road2),
+    final results = <Map<String, dynamic>>[];
+    final lowerQuery = query.toLowerCase();
+    
+    // Search buildings
+    for (final building in _currentSystem!.buildings) {
+      if (building.name.toLowerCase().contains(lowerQuery)) {
+        results.add({
+          'type': 'building',
+          'item': building,
+          'title': building.name,
+          'subtitle': '${building.floors.length} floors',
+        });
+      }
+      
+      // Search floors
+      for (final floor in building.floors) {
+        if (floor.name.toLowerCase().contains(lowerQuery)) {
+          results.add({
+            'type': 'floor',
+            'item': floor,
+            'building': building,
+            'title': floor.name,
+            'subtitle': 'in ${building.name}',
           });
         }
-      }
-    }
-    
-    analysis['potential_connections'] = potentialConnections;
-    
-    return analysis;
-  }
-
-  LatLng? _findNearestConnectionPoint(Road road1, Road road2) {
-    double minDistance = double.infinity;
-    LatLng? nearestPoint;
-    
-    // Check all combinations of points between the two roads
-    for (final point1 in road1.points) {
-      for (final point2 in road2.points) {
-        final distance = _calculateDistance(point1, point2);
-        if (distance < minDistance && distance < 20.0) { // Within 20 meters
-          minDistance = distance;
-          nearestPoint = LatLng(
-            (point1.latitude + point2.latitude) / 2,
-            (point1.longitude + point2.longitude) / 2,
-          );
-        }
-      }
-    }
-    
-    return nearestPoint;
-  }
-
-  double _calculateMinimumDistance(Road road1, Road road2) {
-    double minDistance = double.infinity;
-    
-    for (final point1 in road1.points) {
-      for (final point2 in road2.points) {
-        final distance = _calculateDistance(point1, point2);
-        if (distance < minDistance) {
-          minDistance = distance;
-        }
-      }
-    }
-    
-    return minDistance;
-  }
-
-  double _calculateDistance(LatLng point1, LatLng point2) {
-    const double earthRadius = 6371000;
-    final lat1Rad = point1.latitude * (3.14159 / 180);
-    final lat2Rad = point2.latitude * (3.14159 / 180);
-    final deltaLatRad = (point2.latitude - point1.latitude) * (3.14159 / 180);
-    final deltaLngRad = (point2.longitude - point1.longitude) * (3.14159 / 180);
-
-    final a = sin(deltaLatRad / 2) * sin(deltaLatRad / 2) +
-        cos(lat1Rad) * cos(lat2Rad) * sin(deltaLngRad / 2) * sin(deltaLngRad / 2);
-    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-    return earthRadius * c;
-  }
-
-  // NEW: AUTOMATIC INTERSECTION DETECTION
-  Future<List<Intersection>> detectPotentialIntersections() async {
-    if (_currentSystem == null) return [];
-
-    final potentialIntersections = <Intersection>[];
-    final roads = _currentSystem!.outdoorRoads;
-
-    for (int i = 0; i < roads.length; i++) {
-      for (int j = i + 1; j < roads.length; j++) {
-        final intersectionPoint = _findRoadIntersection(roads[i], roads[j]);
         
-        if (intersectionPoint != null) {
-          final intersection = Intersection(
-            id: const Uuid().v4(),
-            name: 'Detected Intersection',
-            position: intersectionPoint,
-            floorId: '',
-            connectedRoadIds: [roads[i].id, roads[j].id],
-            type: 'simple',
-            properties: {
-              'auto_detected': true,
-              'road1_name': roads[i].name,
-              'road2_name': roads[j].name,
-            },
-          );
-          
-          potentialIntersections.add(intersection);
+        // Search indoor landmarks
+        for (final landmark in floor.landmarks) {
+          if (landmark.name.toLowerCase().contains(lowerQuery) ||
+              landmark.type.toLowerCase().contains(lowerQuery)) {
+            results.add({
+              'type': 'landmark',
+              'item': landmark,
+              'building': building,
+              'floor': floor,
+              'title': landmark.name,
+              'subtitle': '${landmark.type} - ${building.name}, ${floor.name}',
+            });
+          }
         }
-      }
-    }
-
-    return potentialIntersections;
-  }
-
-  LatLng? _findRoadIntersection(Road road1, Road road2) {
-    const double tolerance = 5.0; // 5 meters tolerance
-    
-    for (int i = 0; i < road1.points.length - 1; i++) {
-      for (int j = 0; j < road2.points.length - 1; j++) {
-        final intersection = _lineSegmentIntersection(
-          road1.points[i], road1.points[i + 1],
-          road2.points[j], road2.points[j + 1],
-          tolerance,
-        );
         
-        if (intersection != null) {
-          return intersection;
+        // Search indoor roads
+        for (final road in floor.roads) {
+          if (road.name.toLowerCase().contains(lowerQuery) ||
+              road.type.toLowerCase().contains(lowerQuery)) {
+            results.add({
+              'type': 'road',
+              'item': road,
+              'building': building,
+              'floor': floor,
+              'title': road.name,
+              'subtitle': '${road.type} - ${building.name}, ${floor.name}',
+            });
+          }
         }
       }
     }
     
-    return null;
+    // Search outdoor landmarks
+    for (final landmark in _currentSystem!.outdoorLandmarks) {
+      if (landmark.name.toLowerCase().contains(lowerQuery) ||
+          landmark.type.toLowerCase().contains(lowerQuery)) {
+        results.add({
+          'type': 'landmark',
+          'item': landmark,
+          'title': landmark.name,
+          'subtitle': '${landmark.type} - Outdoor',
+        });
+      }
+    }
+    
+    // Search outdoor roads
+    for (final road in _currentSystem!.outdoorRoads) {
+      if (road.name.toLowerCase().contains(lowerQuery) ||
+          road.type.toLowerCase().contains(lowerQuery)) {
+        results.add({
+          'type': 'road',
+          'item': road,
+          'title': road.name,
+          'subtitle': '${road.type} - Outdoor',
+        });
+      }
+    }
+    
+    return results;
   }
 
-  LatLng? _lineSegmentIntersection(LatLng p1, LatLng p2, LatLng p3, LatLng p4, double tolerance) {
-    // Simplified intersection detection for GPS coordinates
-    // This is a basic implementation - more sophisticated algorithms exist
-    
-    final denom = (p1.latitude - p2.latitude) * (p3.longitude - p4.longitude) - 
-                  (p1.longitude - p2.longitude) * (p3.latitude - p4.latitude);
-    
-    if (denom.abs() < 0.000001) return null; // Lines are parallel
-    
-    final t = ((p1.latitude - p3.latitude) * (p3.longitude - p4.longitude) - 
-               (p1.longitude - p3.longitude) * (p3.latitude - p4.latitude)) / denom;
-    
-    final u = -((p1.latitude - p2.latitude) * (p1.latitude - p3.latitude) - 
-                (p1.longitude - p2.longitude) * (p1.longitude - p3.longitude)) / denom;
-    
-    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
-      final intersectionLat = p1.latitude + t * (p2.latitude - p1.latitude);
-      final intersectionLng = p1.longitude + t * (p2.longitude - p1.longitude);
+  // Validation methods
+  bool validateSystem(RoadSystem system) {
+    try {
+      // Check for duplicate IDs
+      final allIds = <String>{};
       
-      return LatLng(intersectionLat, intersectionLng);
+      // Building IDs
+      for (final building in system.buildings) {
+        if (!allIds.add(building.id)) return false;
+        
+        // Floor IDs
+        for (final floor in building.floors) {
+          if (!allIds.add(floor.id)) return false;
+          
+          // Road IDs
+          for (final road in floor.roads) {
+            if (!allIds.add(road.id)) return false;
+          }
+          
+          // Landmark IDs
+          for (final landmark in floor.landmarks) {
+            if (!allIds.add(landmark.id)) return false;
+          }
+        }
+      }
+      
+      // Outdoor road IDs
+      for (final road in system.outdoorRoads) {
+        if (!allIds.add(road.id)) return false;
+      }
+      
+      // Outdoor landmark IDs
+      for (final landmark in system.outdoorLandmarks) {
+        if (!allIds.add(landmark.id)) return false;
+      }
+      
+      // Intersection IDs
+      for (final intersection in system.outdoorIntersections) {
+        if (!allIds.add(intersection.id)) return false;
+      }
+      
+      return true;
+    } catch (e) {
+      return false;
     }
-    
-    return null;
   }
 
-  Future<void> _saveRoadSystems() async {
-    await DataStorageService.saveRoadSystems(_roadSystems);
+  // Clear all data
+  Future<void> clearAllData() async {
+    try {
+      _roadSystems.clear();
+      _currentSystem = null;
+      
+      final prefs = await SharedPreferences.getInstance();
+      final keys = prefs.getKeys().where((key) => 
+          key.startsWith('road_system_') || 
+          key == 'road_system_ids' || 
+          key == 'current_system_id').toList();
+      
+      for (final key in keys) {
+        await prefs.remove(key);
+      }
+      
+      notifyListeners();
+    } catch (e) {
+      _setError('Failed to clear data: $e');
+    }
+  }
+
+  // Helper methods
+  void _setLoading(bool loading) {
+    _isLoading = loading;
+    if (loading) _clearError();
+    notifyListeners();
+  }
+
+  void _setError(String error) {
+    _error = error;
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  void _clearError() {
+    _error = null;
+  }
+
+  // Refresh current system
+  void refresh() {
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
   }
 }
+
+// Note: IterableExtension is defined in models.dart

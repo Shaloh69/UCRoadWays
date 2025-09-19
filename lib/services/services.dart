@@ -1,431 +1,335 @@
-import 'dart:io';
 import 'dart:convert';
-import 'package:geolocator/geolocator.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:path_provider/path_provider.dart';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:path_provider/path_provider.dart';
 import '../models/models.dart';
-
-class PermissionService {
-  static Future<void> requestPermissions() async {
-    await Permission.location.request();
-    await Permission.locationWhenInUse.request();
-    if (Platform.isAndroid) {
-      await Permission.storage.request();
-    }
-  }
-
-  static Future<bool> hasLocationPermission() async {
-    return await Permission.location.isGranted ||
-           await Permission.locationWhenInUse.isGranted;
-  }
-
-  static Future<bool> hasStoragePermission() async {
-    if (Platform.isAndroid) {
-      return await Permission.storage.isGranted;
-    }
-    return true; // iOS doesn't need explicit storage permission for app documents
-  }
-}
-
-class LocationService {
-  static Future<Position?> getCurrentPosition() async {
-    try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        throw Exception('Location services are disabled.');
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          throw Exception('Location permissions are denied');
-        }
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        throw Exception('Location permissions are permanently denied');
-      }
-
-      return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-    } catch (e) {
-      print('Error getting location: $e');
-      return null;
-    }
-  }
-
-  static Stream<Position> getPositionStream() {
-    return Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 1, // Update every meter
-      ),
-    );
-  }
-
-  static Future<double> distanceBetween(
-    double startLatitude,
-    double startLongitude,
-    double endLatitude,
-    double endLongitude,
-  ) async {
-    return Geolocator.distanceBetween(
-      startLatitude,
-      startLongitude,
-      endLatitude,
-      endLongitude,
-    );
-  }
-}
 
 class DataStorageService {
   static const String _roadSystemsKey = 'road_systems';
   static const String _currentSystemKey = 'current_system_id';
+  static const String _settingsKey = 'app_settings';
 
-  /// Save road systems with enhanced error handling
-  static Future<void> saveRoadSystems(List<RoadSystem> systems) async {
+  // Save road system to SharedPreferences
+  Future<void> saveRoadSystem(RoadSystem roadSystem) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final systemsJson = systems.map((system) {
+      final systemJson = json.encode(roadSystem.toJson());
+      await prefs.setString('road_system_${roadSystem.id}', systemJson);
+      
+      // Update the list of system IDs
+      final systemIds = prefs.getStringList('road_system_ids') ?? [];
+      if (!systemIds.contains(roadSystem.id)) {
+        systemIds.add(roadSystem.id);
+        await prefs.setStringList('road_system_ids', systemIds);
+      }
+      
+      debugPrint('Road system ${roadSystem.name} saved successfully');
+    } catch (e) {
+      debugPrint('Error saving road system: $e');
+      rethrow;
+    }
+  }
+
+  // Load all road systems from SharedPreferences
+  Future<List<RoadSystem>> loadRoadSystems() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final systemIds = prefs.getStringList('road_system_ids') ?? [];
+      final roadSystems = <RoadSystem>[];
+      
+      for (final id in systemIds) {
         try {
-          return system.toJson();
-        } catch (e) {
-          print('Error serializing road system ${system.id}: $e');
-          return null;
-        }
-      }).where((json) => json != null).toList();
-      
-      final jsonString = jsonEncode(systemsJson);
-      await prefs.setString(_roadSystemsKey, jsonString);
-      print('Successfully saved ${systemsJson.length} road systems');
-    } catch (e) {
-      print('Error saving road systems: $e');
-      rethrow;
-    }
-  }
-
-  /// Load road systems with enhanced error handling and data validation
-  static Future<List<RoadSystem>> loadRoadSystems() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final systemsJson = prefs.getString(_roadSystemsKey);
-      
-      if (systemsJson != null && systemsJson.isNotEmpty) {
-        final List<dynamic> systemsList = jsonDecode(systemsJson);
-        final List<RoadSystem> loadedSystems = [];
-        
-        for (int i = 0; i < systemsList.length; i++) {
-          try {
-            final systemData = systemsList[i];
-            if (systemData != null && systemData is Map<String, dynamic>) {
-              // Validate required fields before parsing
-              if (_validateRoadSystemData(systemData)) {
-                final system = RoadSystem.fromJson(systemData);
-                loadedSystems.add(system);
-              } else {
-                print('Skipping invalid road system at index $i: missing required fields');
-              }
-            } else {
-              print('Skipping malformed road system data at index $i');
-            }
-          } catch (e) {
-            print('Error parsing road system at index $i: $e');
-            // Continue loading other systems even if one fails
+          final systemJson = prefs.getString('road_system_$id');
+          if (systemJson != null) {
+            final systemData = json.decode(systemJson);
+            final roadSystem = RoadSystem.fromJson(systemData);
+            roadSystems.add(roadSystem);
           }
+        } catch (e) {
+          debugPrint('Error loading road system $id: $e');
+          // Remove corrupted system
+          systemIds.remove(id);
+          await prefs.remove('road_system_$id');
         }
-        
-        print('Successfully loaded ${loadedSystems.length} road systems');
-        return loadedSystems;
       }
+      
+      // Update clean system IDs
+      await prefs.setStringList('road_system_ids', systemIds);
+      
+      debugPrint('Loaded ${roadSystems.length} road systems');
+      return roadSystems;
     } catch (e) {
-      print('Error loading road systems: $e');
+      debugPrint('Error loading road systems: $e');
+      return [];
     }
-    return [];
   }
 
-  /// Validate road system data before parsing
-  static bool _validateRoadSystemData(Map<String, dynamic> data) {
-    // Check required fields
-    if (data['id'] == null || data['name'] == null || data['centerPosition'] == null) {
-      return false;
-    }
-    
-    // Validate centerPosition format
-    final centerPos = data['centerPosition'];
-    if (centerPos is Map<String, dynamic>) {
-      if (centerPos['latitude'] == null || centerPos['longitude'] == null) {
-        return false;
-      }
-    } else if (centerPos is List) {
-      if (centerPos.length < 2) {
-        return false;
-      }
-    } else {
-      return false;
-    }
-    
-    return true;
-  }
-
-  /// Validate and fix coordinate data
-  static Map<String, dynamic> _sanitizeCoordinateData(Map<String, dynamic> data) {
-    // Fix centerPosition if needed
-    if (data['centerPosition'] != null) {
-      data['centerPosition'] = _sanitizeLatLngData(data['centerPosition']);
-    }
-    
-    // Fix boundaryPoints if present
-    if (data['boundaryPoints'] is List) {
-      final List<dynamic> points = data['boundaryPoints'];
-      data['boundaryPoints'] = points.map((point) => _sanitizeLatLngData(point)).toList();
-    }
-    
-    // Fix building coordinates
-    if (data['buildings'] is List) {
-      final List<dynamic> buildings = data['buildings'];
-      data['buildings'] = buildings.map((building) {
-        if (building is Map<String, dynamic>) {
-          return _sanitizeCoordinateData(building);
-        }
-        return building;
-      }).toList();
-    }
-    
-    // Fix outdoor roads
-    if (data['outdoorRoads'] is List) {
-      final List<dynamic> roads = data['outdoorRoads'];
-      data['outdoorRoads'] = roads.map((road) {
-        if (road is Map<String, dynamic> && road['points'] is List) {
-          final List<dynamic> points = road['points'];
-          road['points'] = points.map((point) => _sanitizeLatLngData(point)).toList();
-        }
-        return road;
-      }).toList();
-    }
-    
-    return data;
-  }
-
-  /// Sanitize individual LatLng data
-  static dynamic _sanitizeLatLngData(dynamic latlngData) {
-    if (latlngData == null) return null;
-    
-    if (latlngData is Map<String, dynamic>) {
-      // Standard format: {"latitude": 33.9737, "longitude": -117.3281}
-      return latlngData;
-    } else if (latlngData is List && latlngData.length >= 2) {
-      // Convert array format to standard format
-      return {
-        'latitude': latlngData[1],
-        'longitude': latlngData[0],
-      };
-    }
-    
-    return latlngData;
-  }
-
-  static Future<void> setCurrentRoadSystem(String systemId) async {
+  // Load specific road system by ID
+  Future<RoadSystem?> loadRoadSystemById(String id) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_currentSystemKey, systemId);
+      final systemJson = prefs.getString('road_system_$id');
+      
+      if (systemJson != null) {
+        final systemData = json.decode(systemJson);
+        return RoadSystem.fromJson(systemData);
+      }
+      
+      return null;
     } catch (e) {
-      print('Error setting current road system: $e');
+      debugPrint('Error loading road system $id: $e');
+      return null;
+    }
+  }
+
+  // Delete road system
+  Future<void> deleteRoadSystem(String id) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('road_system_$id');
+      
+      // Update system IDs list
+      final systemIds = prefs.getStringList('road_system_ids') ?? [];
+      systemIds.remove(id);
+      await prefs.setStringList('road_system_ids', systemIds);
+      
+      // Clear current system if it was deleted
+      final currentSystemId = prefs.getString(_currentSystemKey);
+      if (currentSystemId == id) {
+        await prefs.remove(_currentSystemKey);
+      }
+      
+      debugPrint('Road system $id deleted successfully');
+    } catch (e) {
+      debugPrint('Error deleting road system: $e');
       rethrow;
     }
   }
 
-  static Future<String?> getCurrentRoadSystemId() async {
+  // Save current system ID
+  Future<void> saveCurrentSystemId(String? systemId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (systemId != null) {
+        await prefs.setString(_currentSystemKey, systemId);
+      } else {
+        await prefs.remove(_currentSystemKey);
+      }
+    } catch (e) {
+      debugPrint('Error saving current system ID: $e');
+      rethrow;
+    }
+  }
+
+  // Load current system ID
+  Future<String?> loadCurrentSystemId() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       return prefs.getString(_currentSystemKey);
     } catch (e) {
-      print('Error getting current road system ID: $e');
+      debugPrint('Error loading current system ID: $e');
       return null;
     }
   }
 
-  /// Export road system to JSON with error handling
-  static Future<String?> exportRoadSystemToJson(RoadSystem system) async {
+  // Export road system to JSON file
+  Future<File> exportRoadSystemToJson(RoadSystem roadSystem) async {
     try {
       final directory = await getApplicationDocumentsDirectory();
-      final fileName = '${system.name.replaceAll(' ', '_')}_roadways_${DateTime.now().millisecondsSinceEpoch}.json';
+      final fileName = '${roadSystem.name.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.json';
       final file = File('${directory.path}/$fileName');
       
-      final geoJsonData = _buildGeoJsonData(system);
-      final jsonString = const JsonEncoder.withIndent('  ').convert(geoJsonData);
-      
+      final jsonString = json.encode(roadSystem.toJson());
       await file.writeAsString(jsonString);
-      return file.path;
+      
+      debugPrint('Road system exported to: ${file.path}');
+      return file;
     } catch (e) {
-      print('Error exporting road system: $e');
-      return null;
+      debugPrint('Error exporting road system: $e');
+      rethrow;
     }
   }
 
-  /// Build GeoJSON data with safe coordinate handling
-  static Map<String, dynamic> _buildGeoJsonData(RoadSystem system) {
+  // Import road system from JSON file
+  Future<RoadSystem> importRoadSystemFromJson(File file) async {
+    try {
+      final jsonString = await file.readAsString();
+      final systemData = json.decode(jsonString);
+      final roadSystem = RoadSystem.fromJson(systemData);
+      
+      debugPrint('Road system imported from: ${file.path}');
+      return roadSystem;
+    } catch (e) {
+      debugPrint('Error importing road system: $e');
+      rethrow;
+    }
+  }
+
+  // Export road system to GeoJSON format
+  Future<File> exportRoadSystemToGeoJson(RoadSystem roadSystem) async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final fileName = '${roadSystem.name.replaceAll(' ', '_')}_geojson_${DateTime.now().millisecondsSinceEpoch}.json';
+      final file = File('${directory.path}/$fileName');
+      
+      final geoJson = convertToGeoJson(roadSystem);
+      final jsonString = json.encode(geoJson);
+      await file.writeAsString(jsonString);
+      
+      debugPrint('Road system exported to GeoJSON: ${file.path}');
+      return file;
+    } catch (e) {
+      debugPrint('Error exporting to GeoJSON: $e');
+      rethrow;
+    }
+  }
+
+  // Convert road system to GeoJSON format
+  Map<String, dynamic> convertToGeoJson(RoadSystem roadSystem) {
     final features = <Map<String, dynamic>>[];
     
-    try {
-      // Buildings
-      for (final building in system.buildings) {
-        try {
+    // Add outdoor roads
+    for (final road in roadSystem.outdoorRoads) {
+      features.add({
+        'type': 'Feature',
+        'geometry': {
+          'type': 'LineString',
+          'coordinates': road.points.map((point) => [point.longitude, point.latitude]).toList(),
+        },
+        'properties': {
+          'type': 'road',
+          'name': road.name,
+          'id': road.id,
+          'roadType': road.type,
+          'width': road.width,
+          'isOneWay': road.isOneWay,
+          'context': 'outdoor',
+          ...road.properties,
+        }
+      });
+    }
+    
+    // Add outdoor landmarks
+    for (final landmark in roadSystem.outdoorLandmarks) {
+      features.add({
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [landmark.position.longitude, landmark.position.latitude],
+        },
+        'properties': {
+          'type': 'landmark',
+          'name': landmark.name,
+          'landmarkType': landmark.type,
+          'description': landmark.description,
+          'id': landmark.id,
+          'context': 'outdoor',
+          ...landmark.properties,
+        }
+      });
+    }
+    
+    // Add buildings and their contents
+    for (final building in roadSystem.buildings) {
+      // Building boundary
+      if (building.boundaryPoints.isNotEmpty) {
+        features.add({
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Polygon',
+            'coordinates': [
+              building.boundaryPoints.map((point) => [point.longitude, point.latitude]).toList()
+            ],
+          },
+          'properties': {
+            'type': 'building',
+            'name': building.name,
+            'id': building.id,
+            'floors': building.floors.length,
+            'context': 'building',
+            ...building.properties,
+          }
+        });
+      }
+      
+      // Building center point
+      features.add({
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [building.centerPosition.longitude, building.centerPosition.latitude],
+        },
+        'properties': {
+          'type': 'building_center',
+          'name': building.name,
+          'id': building.id,
+          'floors': building.floors.length,
+          'context': 'building',
+          ...building.properties,
+        }
+      });
+      
+      // Add floor contents
+      for (final floor in building.floors) {
+        // Indoor roads
+        for (final road in floor.roads) {
           features.add({
             'type': 'Feature',
             'geometry': {
-              'type': 'Point',
-              'coordinates': [
-                building.centerPosition.longitude,
-                building.centerPosition.latitude
-              ],
+              'type': 'LineString',
+              'coordinates': road.points.map((point) => [point.longitude, point.latitude]).toList(),
             },
             'properties': {
-              'type': 'building',
-              'name': building.name,
-              'id': building.id,
-              'floors': building.floors.length,
-              ...building.properties,
+              'type': 'indoor_road',
+              'name': road.name,
+              'id': road.id,
+              'roadType': road.type,
+              'width': road.width,
+              'isOneWay': road.isOneWay,
+              'floorId': road.floorId,
+              'floorLevel': floor.level,
+              'floorName': floor.name,
+              'buildingId': building.id,
+              'buildingName': building.name,
+              'context': 'indoor',
+              ...road.properties,
             }
           });
-        } catch (e) {
-          print('Error processing building ${building.id}: $e');
         }
-      }
-      
-      // Outdoor roads
-      for (final road in system.outdoorRoads) {
-        try {
-          if (road.points.isNotEmpty) {
-            features.add({
-              'type': 'Feature',
-              'geometry': {
-                'type': 'LineString',
-                'coordinates': road.points.map((point) => 
-                    [point.longitude, point.latitude]).toList(),
-              },
-              'properties': {
-                'type': 'road',
-                'name': road.name,
-                'id': road.id,
-                'roadType': road.type,
-                'width': road.width,
-                'isOneWay': road.isOneWay,
-                'floorId': road.floorId,
-                ...road.properties,
-              }
-            });
-          }
-        } catch (e) {
-          print('Error processing outdoor road ${road.id}: $e');
-        }
-      }
-      
-      // Outdoor landmarks
-      for (final landmark in system.outdoorLandmarks) {
-        try {
+        
+        // Indoor landmarks
+        for (final landmark in floor.landmarks) {
           features.add({
             'type': 'Feature',
             'geometry': {
               'type': 'Point',
-              'coordinates': [
-                landmark.position.longitude,
-                landmark.position.latitude
-              ],
+              'coordinates': [landmark.position.longitude, landmark.position.latitude],
             },
             'properties': {
-              'type': 'landmark',
+              'type': 'indoor_landmark',
               'name': landmark.name,
               'landmarkType': landmark.type,
               'description': landmark.description,
               'id': landmark.id,
               'floorId': landmark.floorId,
+              'floorLevel': floor.level,
+              'floorName': floor.name,
+              'buildingId': landmark.buildingId,
+              'buildingName': building.name,
+              'isVerticalCirculation': landmark.isVerticalCirculation,
+              'connectedFloors': landmark.connectedFloors,
+              'context': 'indoor',
               ...landmark.properties,
             }
           });
-        } catch (e) {
-          print('Error processing outdoor landmark ${landmark.id}: $e');
         }
       }
-      
-      // Indoor elements from all buildings and floors
-      for (final building in system.buildings) {
-        for (final floor in building.floors) {
-          // Indoor roads
-          for (final road in floor.roads) {
-            try {
-              if (road.points.isNotEmpty) {
-                features.add({
-                  'type': 'Feature',
-                  'geometry': {
-                    'type': 'LineString',
-                    'coordinates': road.points.map((point) => 
-                        [point.longitude, point.latitude]).toList(),
-                  },
-                  'properties': {
-                    'type': 'indoor_road',
-                    'name': road.name,
-                    'id': road.id,
-                    'roadType': road.type,
-                    'width': road.width,
-                    'isOneWay': road.isOneWay,
-                    'floorId': road.floorId,
-                    'buildingId': building.id,
-                    'floorLevel': floor.level,
-                    'floorName': floor.name,
-                    ...road.properties,
-                  }
-                });
-              }
-            } catch (e) {
-              print('Error processing indoor road ${road.id}: $e');
-            }
-          }
-          
-          // Indoor landmarks
-          for (final landmark in floor.landmarks) {
-            try {
-              features.add({
-                'type': 'Feature',
-                'geometry': {
-                  'type': 'Point',
-                  'coordinates': [
-                    landmark.position.longitude,
-                    landmark.position.latitude
-                  ],
-                },
-                'properties': {
-                  'type': 'indoor_landmark',
-                  'name': landmark.name,
-                  'landmarkType': landmark.type,
-                  'description': landmark.description,
-                  'id': landmark.id,
-                  'floorId': landmark.floorId,
-                  'buildingId': building.id,
-                  'floorLevel': floor.level,
-                  'floorName': floor.name,
-                  'isVerticalCirculation': landmark.isVerticalCirculation,
-                  'connectedFloors': landmark.connectedFloors,
-                  ...landmark.properties,
-                }
-              });
-            } catch (e) {
-              print('Error processing indoor landmark ${landmark.id}: $e');
-            }
-          }
-        }
-      }
-    } catch (e) {
-      print('Error building GeoJSON features: $e');
     }
     
     return {
       'type': 'FeatureCollection',
-      'name': '${system.name} - UC RoadWays Export',
+      'name': roadSystem.name,
       'crs': {
         'type': 'name',
         'properties': {
@@ -434,92 +338,309 @@ class DataStorageService {
       },
       'features': features,
       'metadata': {
-        'exported_at': DateTime.now().toIso8601String(),
-        'system_id': system.id,
-        'system_name': system.name,
-        'center_latitude': system.centerPosition.latitude,
-        'center_longitude': system.centerPosition.longitude,
-        'building_count': system.buildings.length,
-        'outdoor_road_count': system.outdoorRoads.length,
-        'outdoor_landmark_count': system.outdoorLandmarks.length,
-        'total_floors': system.allFloors.length,
-        'app_version': '1.0.0',
+        'systemId': roadSystem.id,
+        'systemName': roadSystem.name,
+        'centerPosition': [roadSystem.centerPosition.longitude, roadSystem.centerPosition.latitude],
+        'zoom': roadSystem.zoom,
+        'exportedAt': DateTime.now().toIso8601String(),
+        'totalBuildings': roadSystem.buildings.length,
+        'totalFloors': roadSystem.buildings.fold(0, (sum, b) => sum + b.floors.length),
+        'totalRoads': roadSystem.outdoorRoads.length + 
+                     roadSystem.buildings.fold(0, (sum, b) => 
+                       sum + b.floors.fold(0, (floorSum, f) => floorSum + f.roads.length)),
+        'totalLandmarks': roadSystem.outdoorLandmarks.length + 
+                          roadSystem.buildings.fold(0, (sum, b) => 
+                            sum + b.floors.fold(0, (floorSum, f) => floorSum + f.landmarks.length)),
       }
     };
   }
 
-  /// Import road system from JSON with enhanced validation
-  static Future<RoadSystem?> importRoadSystemFromJson() async {
-    try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['json'],
-      );
-
-      if (result != null && result.files.single.path != null) {
-        final file = File(result.files.single.path!);
-        final jsonString = await file.readAsString();
-        
-        try {
-          final Map<String, dynamic> jsonData = jsonDecode(jsonString);
-          
-          // Validate and sanitize the data
-          if (_validateRoadSystemData(jsonData)) {
-            final sanitizedData = _sanitizeCoordinateData(jsonData);
-            return RoadSystem.fromJson(sanitizedData);
-          } else {
-            print('Invalid road system data format');
-            return null;
-          }
-        } catch (e) {
-          print('Error parsing JSON data: $e');
-          return null;
-        }
-      }
-    } catch (e) {
-      print('Error importing road system: $e');
-    }
-    return null;
-  }
-
-  /// Clear all data with confirmation
-  static Future<void> clearAllData() async {
+  // Save app settings
+  Future<void> saveAppSettings(Map<String, dynamic> settings) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_roadSystemsKey);
-      await prefs.remove(_currentSystemKey);
-      print('All road system data cleared');
+      final settingsJson = json.encode(settings);
+      await prefs.setString(_settingsKey, settingsJson);
     } catch (e) {
-      print('Error clearing data: $e');
+      debugPrint('Error saving app settings: $e');
       rethrow;
     }
   }
 
-  /// Get storage size information
-  static Future<Map<String, dynamic>> getStorageInfo() async {
+  // Load app settings
+  Future<Map<String, dynamic>> loadAppSettings() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final systemsJson = prefs.getString(_roadSystemsKey);
+      final settingsJson = prefs.getString(_settingsKey);
       
-      final info = {
-        'has_data': systemsJson != null,
-        'data_size_bytes': systemsJson?.length ?? 0,
-        'data_size_kb': ((systemsJson?.length ?? 0) / 1024).toStringAsFixed(2),
+      if (settingsJson != null) {
+        return json.decode(settingsJson);
+      }
+      
+      // Return default settings
+      return {
+        'theme': 'system',
+        'mapProvider': 'openstreetmap',
+        'showLocationHistory': true,
+        'autoSave': true,
+        'defaultZoom': 18.0,
+        'trackingAccuracy': 'high',
       };
+    } catch (e) {
+      debugPrint('Error loading app settings: $e');
+      return {};
+    }
+  }
+
+  // Clear all stored data
+  Future<void> clearAllData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
       
-      if (systemsJson != null) {
-        try {
-          final List<dynamic> systemsList = jsonDecode(systemsJson);
-          info['system_count'] = systemsList.length;
-        } catch (e) {
-          info['system_count'] = 0;
-          info['parse_error'] = e.toString();
+      // Get all road system keys
+      final systemIds = prefs.getStringList('road_system_ids') ?? [];
+      
+      // Remove all road system data
+      for (final id in systemIds) {
+        await prefs.remove('road_system_$id');
+      }
+      
+      // Remove system management keys
+      await prefs.remove('road_system_ids');
+      await prefs.remove(_currentSystemKey);
+      
+      debugPrint('All road system data cleared');
+    } catch (e) {
+      debugPrint('Error clearing data: $e');
+      rethrow;
+    }
+  }
+
+  // Get storage usage statistics
+  Future<Map<String, dynamic>> getStorageStats() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final systemIds = prefs.getStringList('road_system_ids') ?? [];
+      
+      int totalSystems = systemIds.length;
+      int totalSize = 0;
+      int totalBuildings = 0;
+      int totalFloors = 0;
+      int totalRoads = 0;
+      int totalLandmarks = 0;
+      
+      for (final id in systemIds) {
+        final systemJson = prefs.getString('road_system_$id');
+        if (systemJson != null) {
+          totalSize += systemJson.length;
+          
+          try {
+            final systemData = json.decode(systemJson);
+            final roadSystem = RoadSystem.fromJson(systemData);
+            
+            totalBuildings += roadSystem.buildings.length;
+            totalFloors += roadSystem.buildings.fold(0, (sum, b) => sum + b.floors.length);
+            totalRoads += roadSystem.outdoorRoads.length + 
+                         roadSystem.buildings.fold(0, (sum, b) => 
+                           sum + b.floors.fold(0, (floorSum, f) => floorSum + f.roads.length));
+            totalLandmarks += roadSystem.outdoorLandmarks.length + 
+                             roadSystem.buildings.fold(0, (sum, b) => 
+                               sum + b.floors.fold(0, (floorSum, f) => floorSum + f.landmarks.length));
+          } catch (e) {
+            debugPrint('Error parsing system for stats: $e');
+          }
         }
       }
       
-      return info;
+      return {
+        'totalSystems': totalSystems,
+        'totalSizeBytes': totalSize,
+        'totalSizeKB': (totalSize / 1024).round(),
+        'totalBuildings': totalBuildings,
+        'totalFloors': totalFloors,
+        'totalRoads': totalRoads,
+        'totalLandmarks': totalLandmarks,
+        'averageSystemSize': totalSystems > 0 ? (totalSize / totalSystems).round() : 0,
+      };
     } catch (e) {
-      return {'error': e.toString()};
+      debugPrint('Error getting storage stats: $e');
+      return {};
     }
+  }
+
+  // Backup data to file
+  Future<File> backupAllData() async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final fileName = 'ucroadways_backup_${DateTime.now().millisecondsSinceEpoch}.json';
+      final file = File('${directory.path}/$fileName');
+      
+      final roadSystems = await loadRoadSystems();
+      final settings = await loadAppSettings();
+      final currentSystemId = await loadCurrentSystemId();
+      
+      final backupData = {
+        'version': '1.0',
+        'exportedAt': DateTime.now().toIso8601String(),
+        'roadSystems': roadSystems.map((rs) => rs.toJson()).toList(),
+        'currentSystemId': currentSystemId,
+        'settings': settings,
+      };
+      
+      final jsonString = json.encode(backupData);
+      await file.writeAsString(jsonString);
+      
+      debugPrint('Data backed up to: ${file.path}');
+      return file;
+    } catch (e) {
+      debugPrint('Error backing up data: $e');
+      rethrow;
+    }
+  }
+
+  // Restore data from backup file
+  Future<void> restoreFromBackup(File backupFile) async {
+    try {
+      final jsonString = await backupFile.readAsString();
+      final backupData = json.decode(jsonString);
+      
+      // Clear existing data
+      await clearAllData();
+      
+      // Restore road systems
+      final roadSystemsData = backupData['roadSystems'] as List;
+      for (final systemData in roadSystemsData) {
+        final roadSystem = RoadSystem.fromJson(systemData);
+        await saveRoadSystem(roadSystem);
+      }
+      
+      // Restore current system ID
+      final currentSystemId = backupData['currentSystemId'] as String?;
+      if (currentSystemId != null) {
+        await saveCurrentSystemId(currentSystemId);
+      }
+      
+      // Restore settings
+      final settings = backupData['settings'] as Map<String, dynamic>?;
+      if (settings != null) {
+        await saveAppSettings(settings);
+      }
+      
+      debugPrint('Data restored from backup: ${backupFile.path}');
+    } catch (e) {
+      debugPrint('Error restoring from backup: $e');
+      rethrow;
+    }
+  }
+
+  // Validate data integrity
+  Future<Map<String, dynamic>> validateDataIntegrity() async {
+    try {
+      final issues = <String>[];
+      final warnings = <String>[];
+      
+      final systemIds = (await SharedPreferences.getInstance()).getStringList('road_system_ids') ?? [];
+      
+      for (final id in systemIds) {
+        try {
+          final roadSystem = await loadRoadSystemById(id);
+          if (roadSystem == null) {
+            issues.add('Road system $id could not be loaded');
+            continue;
+          }
+          
+          // Validate road system structure
+          final systemIssues = _validateRoadSystemStructure(roadSystem);
+          issues.addAll(systemIssues);
+          
+        } catch (e) {
+          issues.add('Error validating road system $id: $e');
+        }
+      }
+      
+      return {
+        'isValid': issues.isEmpty,
+        'issues': issues,
+        'warnings': warnings,
+        'checkedSystems': systemIds.length,
+      };
+    } catch (e) {
+      return {
+        'isValid': false,
+        'issues': ['Validation failed: $e'],
+        'warnings': [],
+        'checkedSystems': 0,
+      };
+    }
+  }
+
+  List<String> _validateRoadSystemStructure(RoadSystem roadSystem) {
+    final issues = <String>[];
+    final allIds = <String>{};
+    
+    // Check for duplicate IDs
+    void checkId(String id, String type) {
+      if (!allIds.add(id)) {
+        issues.add('Duplicate ID found: $id ($type)');
+      }
+    }
+    
+    // Validate buildings
+    for (final building in roadSystem.buildings) {
+      checkId(building.id, 'building');
+      
+      // Validate floors
+      for (final floor in building.floors) {
+        checkId(floor.id, 'floor');
+        
+        if (floor.buildingId != building.id) {
+          issues.add('Floor ${floor.id} has incorrect building ID');
+        }
+        
+        // Validate roads
+        for (final road in floor.roads) {
+          checkId(road.id, 'road');
+          
+          if (road.floorId != floor.id) {
+            issues.add('Road ${road.id} has incorrect floor ID');
+          }
+          
+          if (road.points.length < 2) {
+            issues.add('Road ${road.id} has insufficient points');
+          }
+        }
+        
+        // Validate landmarks
+        for (final landmark in floor.landmarks) {
+          checkId(landmark.id, 'landmark');
+          
+          if (landmark.floorId != floor.id) {
+            issues.add('Landmark ${landmark.id} has incorrect floor ID');
+          }
+          
+          if (landmark.buildingId != building.id) {
+            issues.add('Landmark ${landmark.id} has incorrect building ID');
+          }
+        }
+      }
+    }
+    
+    // Validate outdoor elements
+    for (final road in roadSystem.outdoorRoads) {
+      checkId(road.id, 'outdoor road');
+      if (road.points.length < 2) {
+        issues.add('Outdoor road ${road.id} has insufficient points');
+      }
+    }
+    
+    for (final landmark in roadSystem.outdoorLandmarks) {
+      checkId(landmark.id, 'outdoor landmark');
+    }
+    
+    for (final intersection in roadSystem.outdoorIntersections) {
+      checkId(intersection.id, 'intersection');
+    }
+    
+    return issues;
   }
 }

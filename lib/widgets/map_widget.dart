@@ -27,10 +27,11 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
   static const double _defaultLng = -117.3281; // UC Riverside longitude
   static const double _defaultZoom = 18.0; // Closer zoom for walking
 
-  // Road creation state - ENHANCED for floor support
+  // Road creation state
   bool _isRecordingRoad = false;
   List<LatLng> _tempRoadPoints = [];
   bool _isAddingLandmark = false;
+  bool _isAddingBuilding = false;
   Timer? _recordingTimer;
   LatLng? _lastRecordedPoint;
   static const double _minDistanceForNewPoint = 2.0; // meters
@@ -45,11 +46,6 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
   List<String> _selectedRoadIds = [];
   List<LatLng> _intersections = [];
 
-  // NEW: Floor-specific state
-  String? _currentEditingFloorId;
-  bool _showFloorTransitions = true;
-  Map<String, bool> _floorVisibility = {}; // Track which floors are visible
-
   @override
   void initState() {
     super.initState();
@@ -57,48 +53,13 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
   }
 
   void _setupLocationListener() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final locationProvider = Provider.of<LocationProvider>(context, listen: false);
-      locationProvider.addListener(_onLocationChanged);
-    });
-  }
-
-  void _onLocationChanged() {
     final locationProvider = Provider.of<LocationProvider>(context, listen: false);
-    final currentLocation = locationProvider.currentLatLng;
-    
-    if (currentLocation != null) {
-      if (!_hasInitialCentered) {
-        _centerOnLocation(currentLocation, _defaultZoom);
+    _locationSubscription = locationProvider.locationStream.listen((position) {
+      if (!_hasInitialCentered && mounted) {
+        widget.mapController.move(position, _defaultZoom);
         _hasInitialCentered = true;
       }
-      
-      if (_isRecordingRoad) {
-        _addPointWhileWalking(currentLocation);
-      }
-    }
-  }
-
-  void _centerOnLocation(LatLng location, double zoom) {
-    widget.mapController.move(location, zoom);
-  }
-
-  void _addPointWhileWalking(LatLng currentLocation) {
-    if (_lastRecordedPoint == null) {
-      setState(() {
-        _tempRoadPoints.add(currentLocation);
-        _lastRecordedPoint = currentLocation;
-      });
-      return;
-    }
-
-    final distance = _calculateDistance(_lastRecordedPoint!, currentLocation);
-    if (distance >= _minDistanceForNewPoint) {
-      setState(() {
-        _tempRoadPoints.add(currentLocation);
-        _lastRecordedPoint = currentLocation;
-      });
-    }
+    });
   }
 
   @override
@@ -106,349 +67,184 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
     return Consumer3<LocationProvider, RoadSystemProvider, BuildingProvider>(
       builder: (context, locationProvider, roadSystemProvider, buildingProvider, child) {
         final currentSystem = roadSystemProvider.currentSystem;
+        final currentLocation = locationProvider.currentLatLng;
         final selectedBuilding = buildingProvider.getSelectedBuilding(currentSystem);
         final selectedFloor = buildingProvider.getSelectedFloor(currentSystem);
-
-        // Update editing context based on current selection
-        _currentEditingFloorId = buildingProvider.isIndoorMode ? selectedFloor?.id : null;
-
+        
         return Stack(
           children: [
             FlutterMap(
               mapController: widget.mapController,
               options: MapOptions(
-                initialCenter: _getMapCenter(locationProvider, currentSystem, selectedBuilding),
+                initialCenter: _getMapCenter(currentLocation, currentSystem),
                 initialZoom: _getMapZoom(currentSystem, buildingProvider),
                 minZoom: 10.0,
-                maxZoom: 24.0, // Higher max zoom for indoor details
-                onTap: _isAddingLandmark || _isAddingIntersection || _isConnectingRoads
-                    ? (tapPosition, point) => _handleMapTap(point, roadSystemProvider, buildingProvider)
-                    : null,
-                onLongPress: !_isRecordingRoad 
-                    ? (tapPosition, point) => _showContextMenu(context, point, roadSystemProvider, buildingProvider)
-                    : null,
+                maxZoom: 22.0,
+                onTap: (tapPosition, point) => _handleMapTap(point, buildingProvider, roadSystemProvider),
+                onLongPress: (tapPosition, point) => _handleMapLongPress(point, buildingProvider, roadSystemProvider),
               ),
               children: [
-                // Base tile layer
                 TileLayer(
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.ucroadways',
+                  userAgentPackageName: 'com.ucroadways.app',
                 ),
                 
+                // Building polygons (only show if not in indoor mode or if selected building)
                 if (currentSystem != null) ...[
-                  // CONDITIONAL RENDERING based on indoor/outdoor mode
-                  if (buildingProvider.isOutdoorMode) ...[
-                    // Outdoor view - show all outdoor elements
-                    PolylineLayer(
-                      polylines: _buildOutdoorRoadPolylines(currentSystem),
-                    ),
-                    MarkerLayer(
-                      markers: _buildOutdoorLandmarkMarkers(currentSystem),
-                    ),
-                    MarkerLayer(
-                      markers: _buildIntersectionMarkers(currentSystem.outdoorIntersections),
-                    ),
-                  ] else ...[
-                    // Indoor view - show selected floor content
-                    if (selectedFloor != null) ...[
-                      PolylineLayer(
-                        polylines: _buildIndoorRoadPolylines(selectedFloor),
-                      ),
-                      MarkerLayer(
-                        markers: _buildIndoorLandmarkMarkers(selectedFloor),
-                      ),
-                      // Show indoor intersections for this floor
-                      MarkerLayer(
-                        markers: _buildIntersectionMarkers(
-                          currentSystem.outdoorIntersections.where((i) => i.floorId == selectedFloor.id).toList()
-                        ),
-                      ),
-                    ],
-                  ],
-                  
-                  // Building boundaries (always show)
                   PolygonLayer(
                     polygons: _buildBuildingPolygons(currentSystem, selectedBuilding, buildingProvider),
                   ),
                   
-                  // Building markers (always show for navigation)
-                  MarkerLayer(
-                    markers: _buildBuildingMarkers(currentSystem, buildingProvider),
+                  // Roads layer
+                  PolylineLayer(
+                    polylines: _buildRoadPolylines(currentSystem, selectedFloor, buildingProvider),
                   ),
                   
-                  // NEW: Floor transition markers (elevators/stairs)
-                  if (buildingProvider.isIndoorMode && selectedFloor != null && _showFloorTransitions)
-                    MarkerLayer(
-                      markers: _buildFloorTransitionMarkers(selectedFloor, selectedBuilding!),
-                    ),
-                ],
-                
-                // Current location marker - ENHANCED with indoor/outdoor indication
-                if (locationProvider.currentLatLng != null)
+                  // Landmarks layer
                   MarkerLayer(
                     markers: [
-                      Marker(
-                        point: locationProvider.currentLatLng!,
-                        width: 60,
-                        height: 60,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: _isRecordingRoad 
-                                ? Colors.red.withOpacity(0.3)
-                                : buildingProvider.isIndoorMode
-                                    ? Colors.purple.withOpacity(0.3)
-                                    : Colors.blue.withOpacity(0.3),
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: _isRecordingRoad 
-                                  ? Colors.red 
-                                  : buildingProvider.isIndoorMode
-                                      ? Colors.purple
-                                      : Colors.blue, 
-                              width: 3
-                            ),
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                _isRecordingRoad 
-                                    ? Icons.fiber_manual_record 
-                                    : buildingProvider.isIndoorMode
-                                        ? Icons.business
-                                        : Icons.my_location,
-                                color: _isRecordingRoad 
-                                    ? Colors.red 
-                                    : buildingProvider.isIndoorMode
-                                        ? Colors.purple
-                                        : Colors.blue,
-                                size: 20,
-                              ),
-                              if (buildingProvider.isIndoorMode && selectedFloor != null)
-                                Text(
-                                  'L${selectedFloor.level}',
-                                  style: TextStyle(
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.purple,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
+                      ..._buildLandmarkMarkers(currentSystem, selectedFloor, buildingProvider),
+                      ..._buildBuildingMarkers(currentSystem, buildingProvider),
                     ],
                   ),
-                
-                // Recording road path - ENHANCED for floor context
-                if (_tempRoadPoints.isNotEmpty)
-                  PolylineLayer(
-                    polylines: [
-                      Polyline(
-                        points: _tempRoadPoints,
-                        color: buildingProvider.isIndoorMode 
-                            ? Colors.purple.withOpacity(0.8)
-                            : Colors.red.withOpacity(0.8),
-                        strokeWidth: 4.0,
-                        borderColor: Colors.white,
-                        borderStrokeWidth: 2.0,
-                      ),
-                    ],
-                  ),
-
-                // Recording road points
-                if (_tempRoadPoints.isNotEmpty)
-                  MarkerLayer(
-                    markers: _tempRoadPoints.asMap().entries.map((entry) {
-                      final index = entry.key;
-                      final point = entry.value;
-                      final isFirst = index == 0;
-                      final isLast = index == _tempRoadPoints.length - 1;
-                      
-                      return Marker(
-                        point: point,
-                        width: 16,
-                        height: 16,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: isFirst ? Colors.green : (isLast && !_isRecordingRoad ? Colors.red : Colors.orange),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 1),
-                          ),
-                          child: Center(
-                            child: Text(
-                              '${index + 1}',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 8,
-                                fontWeight: FontWeight.bold,
-                              ),
+                  
+                  // Current location marker
+                  if (currentLocation != null)
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: currentLocation,
+                          width: 20,
+                          height: 20,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.blue,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 2),
                             ),
                           ),
                         ),
-                      );
-                    }).toList(),
-                  ),
+                      ],
+                    ),
+                  
+                  // Temporary road being recorded
+                  if (_isRecordingRoad && _tempRoadPoints.isNotEmpty)
+                    PolylineLayer(
+                      polylines: [
+                        Polyline(
+                          points: _tempRoadPoints,
+                          color: Colors.red,
+                          strokeWidth: 4.0,
+                          pattern: const StrokePattern.dashed(),
+                        ),
+                      ],
+                    ),
+                ],
               ],
             ),
-
-            // ENHANCED: Context-aware recording controls
+            
+            // Recording indicator
             if (_isRecordingRoad)
               Positioned(
-                top: 16,
-                left: 50,
-                right: 50,
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: buildingProvider.isIndoorMode ? Colors.purple[50] : Colors.red[50],
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: buildingProvider.isIndoorMode ? Colors.purple : Colors.red, 
-                      width: 2
+                top: 20,
+                left: 20,
+                right: 20,
+                child: Card(
+                  color: Colors.red,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.fiber_manual_record, color: Colors.white),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Recording Road...',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                        const Spacer(),
+                        Text(
+                          '${_tempRoadPoints.length} points',
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ],
                     ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.2),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.fiber_manual_record, 
-                            color: buildingProvider.isIndoorMode ? Colors.purple : Colors.red, 
-                            size: 20
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Recording ${buildingProvider.isIndoorMode ? 'Indoor' : 'Outdoor'} Road',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: buildingProvider.isIndoorMode ? Colors.purple : Colors.red,
-                              fontSize: 16,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        buildingProvider.getCurrentContextDescription(currentSystem),
-                        style: TextStyle(
-                          fontSize: 12, 
-                          color: buildingProvider.isIndoorMode ? Colors.purple[700] : Colors.red[700]
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '${_tempRoadPoints.length} points recorded • Walk to add points',
-                        style: TextStyle(
-                          fontSize: 12, 
-                          color: buildingProvider.isIndoorMode ? Colors.purple[700] : Colors.red[700]
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: _tempRoadPoints.length >= 2 ? _finishRecording : null,
-                              icon: const Icon(Icons.save),
-                              label: const Text('Save Road'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green,
-                                foregroundColor: Colors.white,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: _stopRecording,
-                              icon: const Icon(Icons.stop),
-                              label: const Text('Stop'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: buildingProvider.isIndoorMode ? Colors.purple : Colors.red,
-                                side: BorderSide(
-                                  color: buildingProvider.isIndoorMode ? Colors.purple : Colors.red
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
                   ),
                 ),
               ),
-
-            // NEW: Floor context indicator
-            if (buildingProvider.isIndoorMode && selectedFloor != null)
+            
+            // Mode indicators
+            if (_isAddingLandmark || _isAddingBuilding)
               Positioned(
-                top: 80,
-                right: 16,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.purple[50],
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.purple, width: 2),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '🏢 ${selectedBuilding?.name ?? 'Building'}',
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
+                top: 20,
+                left: 20,
+                right: 20,
+                child: Card(
+                  color: _isAddingLandmark ? Colors.green : Colors.purple,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _isAddingLandmark ? Icons.place : Icons.business,
+                          color: Colors.white,
                         ),
-                      ),
-                      Text(
-                        buildingProvider.getFloorDisplayName(selectedFloor),
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.purple,
+                        const SizedBox(width: 8),
+                        Text(
+                          _isAddingLandmark ? 'Tap to add landmark' : 'Tap to add building',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                         ),
-                      ),
-                    ],
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white),
+                          onPressed: () => setState(() {
+                            _isAddingLandmark = false;
+                            _isAddingBuilding = false;
+                          }),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-
-            // Road connection mode indicator (updated for floor context)
-            if (_isConnectingRoads)
+            
+            // Floor context indicator
+            if (buildingProvider.isIndoorMode && selectedBuilding != null && selectedFloor != null)
               Positioned(
-                top: 16,
-                left: 50,
-                right: 50,
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.purple[50],
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.purple),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'Road Connection Mode - ${buildingProvider.getCurrentContextDescription(currentSystem)}',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      Text('Selected: ${_selectedRoadIds.length} road(s)'),
-                      if (_selectedRoadIds.length >= 2)
-                        ElevatedButton(
-                          onPressed: _connectSelectedRoads,
-                          child: const Text('Connect Roads'),
+                bottom: 100,
+                left: 20,
+                child: Card(
+                  color: Colors.purple[100],
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Indoor Mode',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.purple[800],
+                          ),
                         ),
-                    ],
+                        Text(
+                          selectedBuilding.name,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.purple[900],
+                          ),
+                        ),
+                        Text(
+                          buildingProvider.getFloorDisplayName(selectedFloor),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.purple[700],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -458,37 +254,29 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
     );
   }
 
-  // ENHANCED: Context-aware map center
-  LatLng _getMapCenter(LocationProvider locationProvider, RoadSystem? currentSystem, Building? selectedBuilding) {
-    // If indoor mode and building selected, center on building
-    if (selectedBuilding != null) {
-      return selectedBuilding.centerPosition;
-    }
-    
-    if (currentSystem != null) {
-      return currentSystem.centerPosition;
-    }
-    
-    if (locationProvider.currentLatLng != null) {
-      return locationProvider.currentLatLng!;
-    }
-    
-    return const LatLng(_defaultLat, _defaultLng);
+  // BUILDING CREATION AND MANAGEMENT
+
+  void startBuildingMode() {
+    setState(() {
+      _isAddingBuilding = true;
+      _isAddingLandmark = false;
+      _isRecordingRoad = false;
+    });
   }
 
-  // ENHANCED: Context-aware zoom level
-  double _getMapZoom(RoadSystem? currentSystem, BuildingProvider buildingProvider) {
-    if (buildingProvider.isIndoorMode) {
-      return 21.0; // Higher zoom for indoor details
-    }
-    return currentSystem?.zoom ?? _defaultZoom;
+  void startLandmarkMode() {
+    setState(() {
+      _isAddingLandmark = true;
+      _isAddingBuilding = false;
+      _isRecordingRoad = false;
+    });
   }
-
-  // ENHANCED ROAD CREATION METHODS
 
   void startRoadRecording() {
     setState(() {
       _isRecordingRoad = true;
+      _isAddingLandmark = false;
+      _isAddingBuilding = false;
       _tempRoadPoints.clear();
       _lastRecordedPoint = null;
     });
@@ -501,7 +289,7 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
     });
   }
 
-  void _stopRecording() {
+  void stopRoadRecording() {
     setState(() {
       _isRecordingRoad = false;
       _tempRoadPoints.clear();
@@ -510,17 +298,300 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
     _recordingTimer?.cancel();
   }
 
-  void _finishRecording() {
+  void finishRoadRecording() {
     if (_tempRoadPoints.length >= 2) {
       _showRoadDetailsDialog();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Need at least 2 points to create a road')),
+      );
     }
+  }
+
+  void _addPointWhileWalking(LatLng point) {
+    if (_lastRecordedPoint == null || 
+        _calculateDistance(_lastRecordedPoint!, point) >= _minDistanceForNewPoint) {
+      setState(() {
+        _tempRoadPoints.add(point);
+        _lastRecordedPoint = point;
+      });
+    }
+  }
+
+  double _calculateDistance(LatLng point1, LatLng point2) {
+    const double earthRadius = 6371000; // meters
+    final double lat1Rad = point1.latitude * pi / 180;
+    final double lat2Rad = point2.latitude * pi / 180;
+    final double deltaLatRad = (point2.latitude - point1.latitude) * pi / 180;
+    final double deltaLngRad = (point2.longitude - point1.longitude) * pi / 180;
+
+    final double a = sin(deltaLatRad / 2) * sin(deltaLatRad / 2) +
+        cos(lat1Rad) * cos(lat2Rad) * sin(deltaLngRad / 2) * sin(deltaLngRad / 2);
+    final double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+
+    return earthRadius * c;
+  }
+
+  void _handleMapTap(LatLng point, BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
+    if (_isAddingBuilding) {
+      _showAddBuildingDialog(point, roadSystemProvider);
+    } else if (_isAddingLandmark) {
+      _showAddLandmarkDialog(point, buildingProvider, roadSystemProvider);
+    }
+  }
+
+  void _handleMapLongPress(LatLng point, BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
+    _showContextMenu(point, buildingProvider, roadSystemProvider);
+  }
+
+  void _showContextMenu(LatLng point, BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Add at Location',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              leading: const Icon(Icons.business, color: Colors.purple),
+              title: const Text('Add Building'),
+              subtitle: const Text('Create a new building structure'),
+              onTap: () {
+                Navigator.pop(context);
+                _showAddBuildingDialog(point, roadSystemProvider);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.place, color: Colors.green),
+              title: const Text('Add Landmark'),
+              subtitle: buildingProvider.isIndoorMode 
+                  ? Text('Add to current floor: ${buildingProvider.getSelectedFloor(roadSystemProvider.currentSystem)?.name ?? 'Unknown'}')
+                  : const Text('Add outdoor landmark'),
+              onTap: () {
+                Navigator.pop(context);
+                _showAddLandmarkDialog(point, buildingProvider, roadSystemProvider);
+              },
+            ),
+            if (_isRecordingRoad) ...[
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.route, color: Colors.red),
+                title: const Text('Add Road Point'),
+                subtitle: Text('${_tempRoadPoints.length} points recorded'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _addPointWhileWalking(point);
+                },
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showAddBuildingDialog(LatLng point, RoadSystemProvider provider) {
+    final nameController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Building'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(
+                labelText: 'Building Name',
+                hintText: 'Enter building name',
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    'Location',
+                    style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey[700]),
+                  ),
+                  Text('Lat: ${point.latitude.toStringAsFixed(6)}'),
+                  Text('Lng: ${point.longitude.toStringAsFixed(6)}'),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              if (nameController.text.isNotEmpty) {
+                _addBuilding(nameController.text, point, provider);
+                Navigator.pop(context);
+                setState(() {
+                  _isAddingBuilding = false;
+                });
+              }
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddLandmarkDialog(LatLng point, BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
+    final nameController = TextEditingController();
+    final descriptionController = TextEditingController();
+    String selectedType = 'entrance';
+    
+    final landmarkTypes = [
+      'entrance', 'bathroom', 'classroom', 'office', 'elevator', 'stairs',
+      'restaurant', 'library', 'parking', 'exit', 'information', 'shop'
+    ];
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: Text(buildingProvider.isIndoorMode ? 'Add Indoor Landmark' : 'Add Outdoor Landmark'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Context info
+                if (buildingProvider.isIndoorMode) ...[
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.purple[50],
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      children: [
+                        Text(
+                          'Adding to: ${buildingProvider.getSelectedBuilding(roadSystemProvider.currentSystem)?.name ?? 'Unknown Building'}',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          'Floor: ${buildingProvider.getSelectedFloor(roadSystemProvider.currentSystem)?.name ?? 'Unknown Floor'}',
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Landmark Name',
+                    hintText: 'Enter landmark name',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                
+                DropdownButtonFormField<String>(
+                  value: selectedType,
+                  decoration: const InputDecoration(
+                    labelText: 'Landmark Type',
+                  ),
+                  items: landmarkTypes.map((type) => DropdownMenuItem(
+                    value: type,
+                    child: Row(
+                      children: [
+                        Icon(_getLandmarkIcon(type), size: 20),
+                        const SizedBox(width: 8),
+                        Text(type.toUpperCase()),
+                      ],
+                    ),
+                  )).toList(),
+                  onChanged: (value) {
+                    setState(() {
+                      selectedType = value!;
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                
+                TextField(
+                  controller: descriptionController,
+                  decoration: const InputDecoration(
+                    labelText: 'Description (Optional)',
+                    hintText: 'Add notes or description',
+                  ),
+                  maxLines: 2,
+                ),
+                const SizedBox(height: 16),
+                
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        'Location',
+                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey[700]),
+                      ),
+                      Text('Lat: ${point.latitude.toStringAsFixed(6)}'),
+                      Text('Lng: ${point.longitude.toStringAsFixed(6)}'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                if (nameController.text.isNotEmpty) {
+                  _addLandmark(
+                    nameController.text,
+                    selectedType,
+                    point,
+                    descriptionController.text,
+                    buildingProvider,
+                    roadSystemProvider,
+                  );
+                  Navigator.pop(context);
+                  setState(() {
+                    _isAddingLandmark = false;
+                  });
+                }
+              },
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showRoadDetailsDialog() {
     final buildingProvider = Provider.of<BuildingProvider>(context, listen: false);
     final nameController = TextEditingController();
     
-    // Default values based on context
     String selectedType = buildingProvider.isIndoorMode ? 'corridor' : 'walkway';
     double width = buildingProvider.isIndoorMode ? 2.0 : 3.0;
     bool isOneWay = false;
@@ -539,18 +610,27 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 // Context info
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: buildingProvider.isIndoorMode ? Colors.purple[50] : Colors.blue[50],
-                    borderRadius: BorderRadius.circular(4),
+                if (buildingProvider.isIndoorMode) ...[
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.purple[50],
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      children: [
+                        Text(
+                          'Adding to: ${buildingProvider.getSelectedBuilding(Provider.of<RoadSystemProvider>(context, listen: false).currentSystem)?.name ?? 'Unknown Building'}',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          'Floor: ${buildingProvider.getSelectedFloor(Provider.of<RoadSystemProvider>(context, listen: false).currentSystem)?.name ?? 'Unknown Floor'}',
+                        ),
+                      ],
+                    ),
                   ),
-                  child: Text(
-                    'Creating road in: ${buildingProvider.getCurrentContextDescription(null)}',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-                const SizedBox(height: 16),
+                  const SizedBox(height: 16),
+                ],
                 
                 TextField(
                   controller: nameController,
@@ -560,22 +640,22 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                
                 DropdownButtonFormField<String>(
                   value: selectedType,
                   decoration: const InputDecoration(labelText: 'Road Type'),
                   items: roadTypes.map((type) => DropdownMenuItem(
                     value: type,
-                    child: Text(type[0].toUpperCase() + type.substring(1)),
+                    child: Text(type.toUpperCase()),
                   )).toList(),
                   onChanged: (value) {
-                    if (value != null) {
-                      setState(() {
-                        selectedType = value;
-                      });
-                    }
+                    setState(() {
+                      selectedType = value!;
+                    });
                   },
                 ),
                 const SizedBox(height: 16),
+                
                 Row(
                   children: [
                     const Text('Width: '),
@@ -583,8 +663,8 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
                       child: Slider(
                         value: width,
                         min: 1.0,
-                        max: buildingProvider.isIndoorMode ? 10.0 : 15.0,
-                        divisions: buildingProvider.isIndoorMode ? 9 : 14,
+                        max: 10.0,
+                        divisions: 18,
                         label: '${width.toStringAsFixed(1)}m',
                         onChanged: (value) {
                           setState(() {
@@ -593,23 +673,30 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
                         },
                       ),
                     ),
-                    Text('${width.toStringAsFixed(1)}m'),
                   ],
                 ),
-                const SizedBox(height: 8),
+                
                 CheckboxListTile(
-                  title: const Text('One Way'),
+                  title: const Text('One-way road'),
                   value: isOneWay,
                   onChanged: (value) {
                     setState(() {
-                      isOneWay = value ?? false;
+                      isOneWay = value!;
                     });
                   },
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'Recorded ${_tempRoadPoints.length} points while walking',
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.blue[50],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    'Road recorded with ${_tempRoadPoints.length} points',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
                 ),
               ],
             ),
@@ -618,7 +705,7 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
             TextButton(
               onPressed: () {
                 Navigator.pop(context);
-                _stopRecording();
+                stopRoadRecording();
               },
               child: const Text('Cancel'),
             ),
@@ -637,10 +724,103 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
     );
   }
 
-  void _saveRoad(String name, String type, double width, bool isOneWay) {
-    final provider = Provider.of<RoadSystemProvider>(context, listen: false);
-    final buildingProvider = Provider.of<BuildingProvider>(context, listen: false);
+  void _addBuilding(String name, LatLng position, RoadSystemProvider provider) {
+    final currentSystem = provider.currentSystem;
     
+    if (currentSystem != null) {
+      final newBuilding = Building(
+        id: const Uuid().v4(),
+        name: name,
+        centerPosition: position,
+      );
+      
+      final updatedBuildings = List<Building>.from(currentSystem.buildings)
+        ..add(newBuilding);
+      
+      final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
+      provider.updateCurrentSystem(updatedSystem);
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Building "$name" added successfully'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  void _addLandmark(
+    String name,
+    String type,
+    LatLng position,
+    String description,
+    BuildingProvider buildingProvider,
+    RoadSystemProvider roadSystemProvider,
+  ) {
+    final currentSystem = roadSystemProvider.currentSystem;
+    if (currentSystem == null) return;
+
+    final newLandmark = Landmark(
+      id: const Uuid().v4(),
+      name: name,
+      type: type,
+      position: position,
+      description: description,
+      floorId: buildingProvider.isIndoorMode ? (buildingProvider.selectedFloorId ?? '') : '',
+      buildingId: buildingProvider.isIndoorMode ? (buildingProvider.selectedBuildingId ?? '') : '',
+    );
+
+    if (buildingProvider.isIndoorMode) {
+      // Add to specific floor
+      final selectedBuilding = buildingProvider.getSelectedBuilding(currentSystem);
+      final selectedFloor = buildingProvider.getSelectedFloor(currentSystem);
+      
+      if (selectedBuilding != null && selectedFloor != null) {
+        final updatedLandmarks = List<Landmark>.from(selectedFloor.landmarks)..add(newLandmark);
+        final updatedFloor = selectedFloor.copyWith(landmarks: updatedLandmarks);
+        
+        final updatedFloors = selectedBuilding.floors
+            .map((f) => f.id == selectedFloor.id ? updatedFloor : f)
+            .toList();
+        final updatedBuilding = selectedBuilding.copyWith(floors: updatedFloors);
+        
+        final updatedBuildings = currentSystem.buildings
+            .map((b) => b.id == selectedBuilding.id ? updatedBuilding : b)
+            .toList();
+        final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
+        
+        roadSystemProvider.updateCurrentSystem(updatedSystem);
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Indoor landmark "$name" added to ${selectedFloor.name}'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } else {
+      // Add to outdoor landmarks
+      final updatedLandmarks = List<Landmark>.from(currentSystem.outdoorLandmarks)..add(newLandmark);
+      final updatedSystem = currentSystem.copyWith(outdoorLandmarks: updatedLandmarks);
+      
+      roadSystemProvider.updateCurrentSystem(updatedSystem);
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Outdoor landmark "$name" added'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  void _saveRoad(String name, String type, double width, bool isOneWay) {
+    final buildingProvider = Provider.of<BuildingProvider>(context, listen: false);
+    final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
+    final currentSystem = roadSystemProvider.currentSystem;
+    
+    if (currentSystem == null || _tempRoadPoints.length < 2) return;
+
     final newRoad = Road(
       id: const Uuid().v4(),
       name: name,
@@ -648,174 +828,74 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
       type: type,
       width: width,
       isOneWay: isOneWay,
-      floorId: _currentEditingFloorId ?? '', // Use current editing context
-      properties: {
-        'created': DateTime.now().toIso8601String(),
-        'createdBy': 'walking_recording',
-        'indoor': buildingProvider.isIndoorMode,
-      },
+      floorId: buildingProvider.isIndoorMode ? (buildingProvider.selectedFloorId ?? '') : '',
     );
 
-    if (buildingProvider.isIndoorMode && _currentEditingFloorId != null) {
-      _addRoadToFloor(newRoad, buildingProvider, provider);
-    } else {
-      provider.addRoadToCurrentSystem(newRoad);
-    }
-
-    _stopRecording();
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('🛤️ Road "$name" saved to ${buildingProvider.getCurrentContextDescription(null)}'),
-        backgroundColor: Colors.green,
-      ),
-    );
-  }
-
-  // NEW: Floor transition markers
-  List<Marker> _buildFloorTransitionMarkers(Floor floor, Building building) {
-    return floor.verticalCirculation.map((landmark) {
-      return Marker(
-        point: landmark.position,
-        width: 40,
-        height: 40,
-        child: GestureDetector(
-          onTap: () => _showFloorTransitionDialog(landmark, building),
-          child: Container(
-            decoration: BoxDecoration(
-              color: landmark.type == 'elevator' ? Colors.orange : Colors.teal,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
-                  blurRadius: 4,
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  landmark.type == 'elevator' ? Icons.elevator : Icons.stairs,
-                  color: Colors.white,
-                  size: 16,
-                ),
-                Text(
-                  '${landmark.connectedFloors.length}F',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 8,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
+    if (buildingProvider.isIndoorMode) {
+      // Add to specific floor
+      final selectedBuilding = buildingProvider.getSelectedBuilding(currentSystem);
+      final selectedFloor = buildingProvider.getSelectedFloor(currentSystem);
+      
+      if (selectedBuilding != null && selectedFloor != null) {
+        final updatedRoads = List<Road>.from(selectedFloor.roads)..add(newRoad);
+        final updatedFloor = selectedFloor.copyWith(roads: updatedRoads);
+        
+        final updatedFloors = selectedBuilding.floors
+            .map((f) => f.id == selectedFloor.id ? updatedFloor : f)
+            .toList();
+        final updatedBuilding = selectedBuilding.copyWith(floors: updatedFloors);
+        
+        final updatedBuildings = currentSystem.buildings
+            .map((b) => b.id == selectedBuilding.id ? updatedBuilding : b)
+            .toList();
+        final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
+        
+        roadSystemProvider.updateCurrentSystem(updatedSystem);
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Indoor road "$name" added to ${selectedFloor.name}'),
+            backgroundColor: Colors.green,
           ),
+        );
+      }
+    } else {
+      // Add to outdoor roads
+      final updatedRoads = List<Road>.from(currentSystem.outdoorRoads)..add(newRoad);
+      final updatedSystem = currentSystem.copyWith(outdoorRoads: updatedRoads);
+      
+      roadSystemProvider.updateCurrentSystem(updatedSystem);
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Outdoor road "$name" added'),
+          backgroundColor: Colors.green,
         ),
       );
-    }).toList();
+    }
+
+    stopRoadRecording();
   }
 
-  void _showFloorTransitionDialog(Landmark landmark, Building building) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(
-              landmark.type == 'elevator' ? Icons.elevator : Icons.stairs,
-              color: landmark.type == 'elevator' ? Colors.orange : Colors.teal,
-            ),
-            const SizedBox(width: 8),
-            Expanded(child: Text(landmark.name)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Type: ${landmark.type[0].toUpperCase()}${landmark.type.substring(1)}'),
-            const SizedBox(height: 8),
-            const Text('Connected Floors:', style: TextStyle(fontWeight: FontWeight.bold)),
-            ...landmark.connectedFloors.map((floorId) {
-              final floor = building.floors.where((f) => f.id == floorId).firstOrNull;
-              return Text('• ${floor?.name ?? 'Unknown Floor'}');
-            }),
-            if (landmark.description.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text('Notes: ${landmark.description}'),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-          if (landmark.connectedFloors.isNotEmpty)
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _showFloorSelectionDialog(landmark, building);
-              },
-              child: const Text('Go to Floor'),
-            ),
-        ],
-      ),
-    );
+  // MAP RENDERING METHODS
+
+  LatLng _getMapCenter(LatLng? currentLocation, RoadSystem? currentSystem) {
+    if (currentLocation != null) {
+      return currentLocation;
+    }
+    if (currentSystem != null) {
+      return currentSystem.centerPosition;
+    }
+    return const LatLng(_defaultLat, _defaultLng);
   }
 
-  void _showFloorSelectionDialog(Landmark landmark, Building building) {
-    final buildingProvider = Provider.of<BuildingProvider>(context, listen: false);
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Select Floor - ${landmark.name}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: landmark.connectedFloors.map((floorId) {
-            final floor = building.floors.where((f) => f.id == floorId).firstOrNull;
-            if (floor == null) return const SizedBox.shrink();
-            
-            return ListTile(
-              leading: Icon(_getFloorIcon(floor.level)),
-              title: Text(buildingProvider.getFloorDisplayName(floor)),
-              onTap: () {
-                buildingProvider.navigateToFloor(building.id, floor.id);
-                Navigator.pop(context);
-                
-                // Center map on the landmark position on the new floor
-                widget.mapController.move(landmark.position, 21.0);
-                
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('📍 Switched to ${floor.name}'),
-                    backgroundColor: Colors.purple,
-                  ),
-                );
-              },
-            );
-          }).toList(),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-        ],
-      ),
-    );
+  double _getMapZoom(RoadSystem? currentSystem, BuildingProvider buildingProvider) {
+    if (buildingProvider.isIndoorMode) {
+      return 21.0; // Higher zoom for indoor details
+    }
+    return currentSystem?.zoom ?? _defaultZoom;
   }
 
-  IconData _getFloorIcon(int level) {
-    if (level < 0) return Icons.arrow_downward;
-    if (level == 0) return Icons.business;
-    return Icons.arrow_upward;
-  }
-
-  // ENHANCED BUILDING POLYGON RENDERING
   List<Polygon> _buildBuildingPolygons(RoadSystem system, Building? selectedBuilding, BuildingProvider buildingProvider) {
     return system.buildings.map((building) {
       final isSelected = building.id == selectedBuilding?.id;
@@ -825,59 +905,77 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
       
       return Polygon(
         points: building.boundaryPoints.isNotEmpty 
-            ? building.boundaryPoints 
-            : _createCircularBoundary(building.centerPosition, 50),
-        color: isSelected 
-            ? (buildingProvider.isIndoorMode ? Colors.purple : Colors.blue).withOpacity(opacity)
-            : Colors.grey.withOpacity(opacity),
-        borderColor: isSelected 
-            ? (buildingProvider.isIndoorMode ? Colors.purple : Colors.blue)
-            : Colors.grey,
+            ? building.boundaryPoints
+            : _generateDefaultBuildingBoundary(building.centerPosition),
+        color: isSelected ? Colors.purple.withOpacity(opacity) : Colors.grey.withOpacity(opacity),
+        borderColor: isSelected ? Colors.purple : Colors.grey,
         borderStrokeWidth: isSelected ? 3 : 1,
       );
     }).toList();
   }
 
-  // ENHANCED ROAD POLYLINES for floor context
-  List<Polyline> _buildOutdoorRoadPolylines(RoadSystem system) {
-    return system.outdoorRoads.map((road) {
-      final isSelected = _selectedRoadIds.contains(road.id);
-      return Polyline(
-        points: road.points,
-        color: isSelected 
-            ? Colors.purple 
-            : _getRoadColor(road.type),
-        strokeWidth: isSelected ? road.width + 2 : road.width,
-        borderColor: isSelected ? Colors.white : Colors.black,
-        borderStrokeWidth: isSelected ? 2 : 1,
-      );
-    }).toList();
+  List<LatLng> _generateDefaultBuildingBoundary(LatLng center) {
+    const double size = 0.0001; // Small building size
+    return [
+      LatLng(center.latitude - size, center.longitude - size),
+      LatLng(center.latitude - size, center.longitude + size),
+      LatLng(center.latitude + size, center.longitude + size),
+      LatLng(center.latitude + size, center.longitude - size),
+    ];
   }
 
-  List<Polyline> _buildIndoorRoadPolylines(Floor floor) {
-    return floor.roads.map((road) {
-      final isSelected = _selectedRoadIds.contains(road.id);
-      return Polyline(
+  List<Polyline> _buildRoadPolylines(RoadSystem system, Floor? selectedFloor, BuildingProvider buildingProvider) {
+    final polylines = <Polyline>[];
+    
+    // Outdoor roads (always visible unless in indoor mode)
+    if (!buildingProvider.isIndoorMode) {
+      polylines.addAll(system.outdoorRoads.map((road) => Polyline(
         points: road.points,
-        color: isSelected 
-            ? Colors.purple
-            : _getRoadColor(road.type).withOpacity(0.9),
-        strokeWidth: isSelected ? road.width + 2 : road.width,
-        borderColor: isSelected ? Colors.white : Colors.grey,
-        borderStrokeWidth: isSelected ? 2 : 1,
-      );
-    }).toList();
+        color: _getRoadColor(road.type),
+        strokeWidth: road.width.clamp(2.0, 8.0),
+      )));
+    }
+    
+    // Indoor roads (only for selected floor)
+    if (buildingProvider.isIndoorMode && selectedFloor != null) {
+      polylines.addAll(selectedFloor.roads.map((road) => Polyline(
+        points: road.points,
+        color: _getRoadColor(road.type),
+        strokeWidth: road.width.clamp(1.0, 6.0),
+      )));
+    }
+    
+    return polylines;
   }
 
-  // ENHANCED LANDMARK MARKERS
-  List<Marker> _buildOutdoorLandmarkMarkers(RoadSystem system) {
-    return system.outdoorLandmarks.map((landmark) {
-      return Marker(
+  Color _getRoadColor(String type) {
+    switch (type) {
+      case 'corridor':
+        return Colors.purple;
+      case 'hallway':
+        return Colors.indigo;
+      case 'walkway':
+        return Colors.blue;
+      case 'road':
+        return Colors.grey[700]!;
+      case 'path':
+        return Colors.brown;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  List<Marker> _buildLandmarkMarkers(RoadSystem system, Floor? selectedFloor, BuildingProvider buildingProvider) {
+    final markers = <Marker>[];
+    
+    // Outdoor landmarks (always visible unless in indoor mode)
+    if (!buildingProvider.isIndoorMode) {
+      markers.addAll(system.outdoorLandmarks.map((landmark) => Marker(
         point: landmark.position,
         width: 30,
         height: 30,
         child: GestureDetector(
-          onTap: () => _showLandmarkInfo(context, landmark),
+          onTap: () => _showLandmarkInfo(landmark),
           child: Container(
             decoration: BoxDecoration(
               color: _getLandmarkColor(landmark.type),
@@ -891,47 +989,36 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
             ),
           ),
         ),
-      );
-    }).toList();
-  }
-
-  List<Marker> _buildIndoorLandmarkMarkers(Floor floor) {
-    return floor.landmarks.map((landmark) {
-      final isVerticalCirculation = landmark.isVerticalCirculation;
-      
-      return Marker(
+      )));
+    }
+    
+    // Indoor landmarks (only for selected floor)
+    if (buildingProvider.isIndoorMode && selectedFloor != null) {
+      markers.addAll(selectedFloor.landmarks.map((landmark) => Marker(
         point: landmark.position,
-        width: isVerticalCirculation ? 35 : 25,
-        height: isVerticalCirculation ? 35 : 25,
+        width: 25,
+        height: 25,
         child: GestureDetector(
-          onTap: () => _showLandmarkInfo(context, landmark),
+          onTap: () => _showLandmarkInfo(landmark),
           child: Container(
             decoration: BoxDecoration(
-              color: _getLandmarkColor(landmark.type).withOpacity(0.9),
+              color: _getLandmarkColor(landmark.type),
               shape: BoxShape.circle,
-              border: Border.all(
-                color: isVerticalCirculation ? Colors.yellow : Colors.white, 
-                width: isVerticalCirculation ? 3 : 2
-              ),
-              boxShadow: isVerticalCirculation ? [
-                BoxShadow(
-                  color: Colors.yellow.withOpacity(0.5),
-                  blurRadius: 8,
-                ),
-              ] : null,
+              border: Border.all(color: Colors.white, width: 2),
             ),
             child: Icon(
               _getLandmarkIcon(landmark.type),
               color: Colors.white,
-              size: isVerticalCirculation ? 18 : 12,
+              size: 12,
             ),
           ),
         ),
-      );
-    }).toList();
+      )));
+    }
+    
+    return markers;
   }
 
-  // ENHANCED BUILDING MARKERS with floor indication
   List<Marker> _buildBuildingMarkers(RoadSystem system, BuildingProvider buildingProvider) {
     return system.buildings.map((building) {
       final isSelected = building.id == buildingProvider.selectedBuildingId;
@@ -984,11 +1071,10 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
-                    color: isSelected ? Colors.purple : Colors.black,
+                    color: isSelected ? Colors.purple : Colors.grey[700],
                   ),
-                  textAlign: TextAlign.center,
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  maxLines: 2,
                 ),
               ],
             ),
@@ -999,49 +1085,50 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
   }
 
   void _handleBuildingTap(Building building, BuildingProvider buildingProvider) {
-    if (buildingProvider.selectedBuildingId == building.id) {
-      // If already selected, show floor selection
-      _showFloorQuickSelect(building, buildingProvider);
-    } else {
-      // Select building and enter indoor mode
-      buildingProvider.switchToIndoorMode(building.id);
-      widget.mapController.move(building.centerPosition, 21.0);
+    buildingProvider.selectBuilding(building.id);
+    
+    if (building.floors.isNotEmpty) {
+      // Auto-select the default floor or first floor
+      final defaultFloor = building.defaultFloor ?? building.floors.first;
+      buildingProvider.selectFloor(defaultFloor.id);
+      buildingProvider.setIndoorMode(true);
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Entered ${building.name} - ${defaultFloor.name}'),
+          backgroundColor: Colors.purple,
+        ),
+      );
     }
   }
 
-  void _showFloorQuickSelect(Building building, BuildingProvider buildingProvider) {
+  void _showLandmarkInfo(Landmark landmark) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('${building.name} - Select Floor'),
+        title: Row(
+          children: [
+            Icon(
+              _getLandmarkIcon(landmark.type),
+              color: _getLandmarkColor(landmark.type),
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: Text(landmark.name)),
+          ],
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Outdoor option
-            ListTile(
-              leading: const Icon(Icons.landscape),
-              title: const Text('Outdoor View'),
-              selected: buildingProvider.isOutdoorMode,
-              onTap: () {
-                buildingProvider.switchToOutdoorMode();
-                Navigator.pop(context);
-              },
-            ),
-            const Divider(),
-            // Floor options
-            ...building.sortedFloors.map((floor) {
-              final isSelected = floor.id == buildingProvider.selectedFloorId;
-              return ListTile(
-                leading: Icon(_getFloorIcon(floor.level)),
-                title: Text(buildingProvider.getFloorDisplayName(floor)),
-                subtitle: Text('${floor.roads.length} roads, ${floor.landmarks.length} landmarks'),
-                selected: isSelected,
-                onTap: () {
-                  buildingProvider.navigateToFloor(building.id, floor.id);
-                  Navigator.pop(context);
-                },
-              );
-            }),
+            Text('Type: ${landmark.type.toUpperCase()}'),
+            if (landmark.description.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text('Description: ${landmark.description}'),
+            ],
+            if (landmark.isVerticalCirculation && landmark.connectedFloors.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text('Connected Floors: ${landmark.connectedFloors.length}'),
+            ],
           ],
         ),
         actions: [
@@ -1052,177 +1139,6 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
         ],
       ),
     );
-  }
-
-  // Implement other required methods...
-  
-  void _handleMapTap(LatLng point, RoadSystemProvider provider, BuildingProvider buildingProvider) {
-    if (_isAddingLandmark) {
-      _showAddLandmarkDialog(point, provider, buildingProvider);
-    } else if (_isAddingIntersection) {
-      _addIntersection(point);
-    } else if (_isConnectingRoads) {
-      // Handle road selection for connection
-    }
-  }
-
-  void _showContextMenu(BuildContext context, LatLng point, RoadSystemProvider provider, BuildingProvider buildingProvider) {
-    final isIndoor = buildingProvider.isIndoorMode;
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Add ${isIndoor ? 'Indoor' : 'Outdoor'} Item'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (isIndoor)
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.purple[50],
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  'Adding to: ${buildingProvider.getCurrentContextDescription(null)}',
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ),
-            const SizedBox(height: 8),
-            ListTile(
-              leading: const Icon(Icons.place),
-              title: const Text('Add Landmark'),
-              onTap: () {
-                Navigator.pop(context);
-                _showAddLandmarkDialog(point, provider, buildingProvider);
-              },
-            ),
-            if (!isIndoor) ...[
-              ListTile(
-                leading: const Icon(Icons.business),
-                title: const Text('Add Building'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showAddBuildingDialog(point, provider);
-                },
-              ),
-            ],
-            ListTile(
-              leading: const Icon(Icons.multiple_stop),
-              title: const Text('Add Intersection'),
-              onTap: () {
-                Navigator.pop(context);
-                _addIntersection(point);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Add other missing methods like _showAddLandmarkDialog, _calculateDistance, etc.
-  // These would be similar to the original implementation but with floor context awareness
-  
-  double _calculateDistance(LatLng point1, LatLng point2) {
-    const double earthRadius = 6371000;
-    final lat1Rad = point1.latitude * (pi / 180);
-    final lat2Rad = point2.latitude * (pi / 180);
-    final deltaLatRad = (point2.latitude - point1.latitude) * (pi / 180);
-    final deltaLngRad = (point2.longitude - point1.longitude) * (pi / 180);
-
-    final a = sin(deltaLatRad / 2) * sin(deltaLatRad / 2) +
-        cos(lat1Rad) * cos(lat2Rad) * sin(deltaLngRad / 2) * sin(deltaLngRad / 2);
-    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-    return earthRadius * c;
-  }
-
-  void startAddingIntersection() {
-    setState(() {
-      _isAddingIntersection = true;
-    });
-  }
-
-  void startRoadConnectionMode() {
-    setState(() {
-      _isConnectingRoads = true;
-      _selectedRoadIds.clear();
-    });
-  }
-
-  void stopRoadConnectionMode() {
-    setState(() {
-      _isConnectingRoads = false;
-      _selectedRoadIds.clear();
-    });
-  }
-
-  void _addIntersection(LatLng point) {
-    setState(() {
-      _intersections.add(point);
-      _isAddingIntersection = false;
-    });
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Intersection added')),
-    );
-  }
-
-  void _connectSelectedRoads() {
-    if (_selectedRoadIds.length >= 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Connected ${_selectedRoadIds.length} roads')),
-      );
-      
-      setState(() {
-        _isConnectingRoads = false;
-        _selectedRoadIds.clear();
-      });
-    }
-  }
-
-  List<Marker> _buildIntersectionMarkers(List<Intersection> intersections) {
-    return intersections.map((intersection) {
-      return Marker(
-        point: intersection.position,
-        width: 30,
-        height: 30,
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.orange,
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 2),
-          ),
-          child: const Icon(
-            Icons.multiple_stop,
-            color: Colors.white,
-            size: 16,
-          ),
-        ),
-      );
-    }).toList();
-  }
-
-  // Getters for external access
-  bool get isRecordingRoad => _isRecordingRoad;
-  bool get isConnectingRoads => _isConnectingRoads;
-  bool get isAddingIntersection => _isAddingIntersection;
-
-  // Implement helper methods for colors, icons, etc.
-  Color _getRoadColor(String type) {
-    switch (type) {
-      case 'road':
-        return Colors.grey[800]!;
-      case 'walkway':
-        return Colors.brown;
-      case 'corridor':
-        return Colors.orange;
-      case 'hallway':
-        return Colors.purple[300]!;
-      default:
-        return Colors.grey;
-    }
   }
 
   Color _getLandmarkColor(String type) {
@@ -1239,14 +1155,18 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
         return Colors.orange;
       case 'stairs':
         return Colors.teal;
-      case 'parking':
-        return Colors.indigo;
-      case 'cafe':
-        return Colors.deepOrange;
+      case 'restaurant':
+        return Colors.pink;
       case 'library':
-        return Colors.brown;
-      case 'gym':
+        return Colors.indigo;
+      case 'parking':
+        return Colors.grey;
+      case 'exit':
+        return Colors.red[800]!;
+      case 'information':
         return Colors.cyan;
+      case 'shop':
+        return Colors.amber;
       default:
         return Colors.grey;
     }
@@ -1266,74 +1186,21 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
         return Icons.elevator;
       case 'stairs':
         return Icons.stairs;
-      case 'parking':
-        return Icons.local_parking;
-      case 'cafe':
-        return Icons.local_cafe;
+      case 'restaurant':
+        return Icons.restaurant;
       case 'library':
         return Icons.local_library;
-      case 'gym':
-        return Icons.fitness_center;
+      case 'parking':
+        return Icons.local_parking;
+      case 'exit':
+        return Icons.exit_to_app;
+      case 'information':
+        return Icons.info;
+      case 'shop':
+        return Icons.shopping_cart;
       default:
         return Icons.place;
     }
-  }
-
-  List<LatLng> _createCircularBoundary(LatLng center, double radiusMeters) {
-    const int points = 16;
-    const double earthRadius = 6371000;
-    
-    List<LatLng> boundary = [];
-    
-    for (int i = 0; i < points; i++) {
-      double angle = (i * 2 * pi) / points;
-      double deltaLat = radiusMeters * cos(angle) / earthRadius * (180 / pi);
-      double deltaLng = radiusMeters * sin(angle) / 
-          (earthRadius * cos(center.latitude * pi / 180)) * (180 / pi);
-      
-      boundary.add(LatLng(
-        center.latitude + deltaLat,
-        center.longitude + deltaLng,
-      ));
-    }
-    
-    return boundary;
-  }
-
-  // Add placeholder implementations for missing methods
-  void _showAddLandmarkDialog(LatLng point, RoadSystemProvider provider, BuildingProvider buildingProvider) {
-    // Implementation similar to original but with floor context
-  }
-
-  void _showAddBuildingDialog(LatLng point, RoadSystemProvider provider) {
-    // Implementation similar to original
-  }
-
-  void _showLandmarkInfo(BuildContext context, Landmark landmark) {
-    // Implementation similar to original
-  }
-
-  void _addRoadToFloor(Road road, BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
-    final currentSystem = roadSystemProvider.currentSystem;
-    final selectedBuilding = buildingProvider.getSelectedBuilding(currentSystem);
-    final selectedFloor = buildingProvider.getSelectedFloor(currentSystem);
-    
-    if (currentSystem == null || selectedBuilding == null || selectedFloor == null) return;
-
-    final updatedRoads = List<Road>.from(selectedFloor.roads)..add(road);
-    final updatedFloor = selectedFloor.copyWith(roads: updatedRoads);
-    
-    final updatedFloors = selectedBuilding.floors
-        .map((f) => f.id == selectedFloor.id ? updatedFloor : f)
-        .toList();
-    final updatedBuilding = selectedBuilding.copyWith(floors: updatedFloors);
-    
-    final updatedBuildings = currentSystem.buildings
-        .map((b) => b.id == selectedBuilding.id ? updatedBuilding : b)
-        .toList();
-    final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
-    
-    roadSystemProvider.updateCurrentSystem(updatedSystem);
   }
 
   @override

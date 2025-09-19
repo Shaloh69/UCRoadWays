@@ -3,47 +3,6 @@ import 'package:json_annotation/json_annotation.dart';
 
 part 'models.g.dart';
 
-// Helper function for safe LatLng parsing
-LatLng _parseLatLng(dynamic json) {
-  if (json == null) {
-    throw ArgumentError('LatLng JSON data cannot be null');
-  }
-  
-  if (json is Map<String, dynamic>) {
-    // Standard format: {"latitude": 33.9737, "longitude": -117.3281}
-    final lat = json['latitude'];
-    final lng = json['longitude'];
-    
-    if (lat == null || lng == null) {
-      throw ArgumentError('LatLng JSON must contain latitude and longitude');
-    }
-    
-    return LatLng(
-      (lat is num) ? lat.toDouble() : double.parse(lat.toString()),
-      (lng is num) ? lng.toDouble() : double.parse(lng.toString()),
-    );
-  } else if (json is List && json.length >= 2) {
-    // Array format: [longitude, latitude] (GeoJSON style)
-    return LatLng(
-      (json[1] is num) ? json[1].toDouble() : double.parse(json[1].toString()),
-      (json[0] is num) ? json[0].toDouble() : double.parse(json[0].toString()),
-    );
-  } else {
-    throw ArgumentError('Invalid LatLng format: $json');
-  }
-}
-
-// Helper function for safe LatLng list parsing
-List<LatLng> _parseLatLngList(dynamic json) {
-  if (json == null) return [];
-  
-  if (json is! List) {
-    throw ArgumentError('Expected list for LatLng array parsing');
-  }
-  
-  return (json as List).map((item) => _parseLatLng(item)).toList();
-}
-
 @JsonSerializable()
 class Road {
   final String id;
@@ -53,7 +12,7 @@ class Road {
   final double width;
   final bool isOneWay;
   final String floorId; // Empty string for outdoor roads
-  final List<String> connectedIntersections; // NEW: For road network analysis
+  final List<String> connectedIntersections;
   final Map<String, dynamic> properties;
 
   Road({
@@ -68,29 +27,9 @@ class Road {
     this.properties = const {},
   });
 
-  factory Road.fromJson(Map<String, dynamic> json) {
-    try {
-      return Road(
-        id: json['id']?.toString() ?? '',
-        name: json['name']?.toString() ?? '',
-        points: _parseLatLngList(json['points']),
-        type: json['type']?.toString() ?? 'road',
-        width: (json['width'] is num) ? json['width'].toDouble() : 5.0,
-        isOneWay: json['isOneWay'] == true,
-        floorId: json['floorId']?.toString() ?? '',
-        connectedIntersections: (json['connectedIntersections'] as List<dynamic>?)
-            ?.map((e) => e.toString())
-            .toList() ?? const [],
-        properties: (json['properties'] as Map<String, dynamic>?) ?? const {},
-      );
-    } catch (e) {
-      throw FormatException('Failed to parse Road from JSON: $e');
-    }
-  }
-
+  factory Road.fromJson(Map<String, dynamic> json) => _$RoadFromJson(json);
   Map<String, dynamic> toJson() => _$RoadToJson(this);
 
-  // NEW: Helper methods
   bool get isIndoor => floorId.isNotEmpty;
   bool get isOutdoor => floorId.isEmpty;
 
@@ -125,8 +64,8 @@ class Landmark {
   final LatLng position;
   final String floorId; // Empty string for outdoor landmarks
   final String description;
-  final List<String> connectedFloors; // NEW: For vertical circulation
-  final String buildingId; // NEW: Link to building
+  final List<String> connectedFloors; // For vertical circulation
+  final String buildingId; // Link to building
   final Map<String, dynamic> properties;
 
   Landmark({
@@ -141,29 +80,9 @@ class Landmark {
     this.properties = const {},
   });
 
-  factory Landmark.fromJson(Map<String, dynamic> json) {
-    try {
-      return Landmark(
-        id: json['id']?.toString() ?? '',
-        name: json['name']?.toString() ?? '',
-        type: json['type']?.toString() ?? '',
-        position: _parseLatLng(json['position']),
-        floorId: json['floorId']?.toString() ?? '',
-        description: json['description']?.toString() ?? '',
-        connectedFloors: (json['connectedFloors'] as List<dynamic>?)
-            ?.map((e) => e.toString())
-            .toList() ?? const [],
-        buildingId: json['buildingId']?.toString() ?? '',
-        properties: (json['properties'] as Map<String, dynamic>?) ?? const {},
-      );
-    } catch (e) {
-      throw FormatException('Failed to parse Landmark from JSON: $e');
-    }
-  }
-
+  factory Landmark.fromJson(Map<String, dynamic> json) => _$LandmarkFromJson(json);
   Map<String, dynamic> toJson() => _$LandmarkToJson(this);
 
-  // NEW: Helper methods
   bool get isIndoor => floorId.isNotEmpty;
   bool get isOutdoor => floorId.isEmpty;
   bool get isVerticalCirculation => type == 'elevator' || type == 'stairs';
@@ -200,8 +119,8 @@ class Floor {
   final String buildingId;
   final List<Road> roads;
   final List<Landmark> landmarks;
-  final List<String> connectedFloors; // NEW: Floors accessible from this floor
-  final LatLng? centerPosition; // NEW: Center point for floor
+  final List<String> connectedFloors; // Floors accessible from this floor
+  final LatLng? centerPosition; // Center point for floor
   final Map<String, dynamic> properties;
 
   Floor({
@@ -216,35 +135,9 @@ class Floor {
     this.properties = const {},
   });
 
-  factory Floor.fromJson(Map<String, dynamic> json) {
-    try {
-      return Floor(
-        id: json['id']?.toString() ?? '',
-        name: json['name']?.toString() ?? '',
-        level: (json['level'] is num) ? json['level'].toInt() : 0,
-        buildingId: json['buildingId']?.toString() ?? '',
-        roads: (json['roads'] as List<dynamic>?)
-            ?.map((e) => Road.fromJson(e as Map<String, dynamic>))
-            .toList() ?? const [],
-        landmarks: (json['landmarks'] as List<dynamic>?)
-            ?.map((e) => Landmark.fromJson(e as Map<String, dynamic>))
-            .toList() ?? const [],
-        connectedFloors: (json['connectedFloors'] as List<dynamic>?)
-            ?.map((e) => e.toString())
-            .toList() ?? const [],
-        centerPosition: json['centerPosition'] != null 
-            ? _parseLatLng(json['centerPosition'])
-            : null,
-        properties: (json['properties'] as Map<String, dynamic>?) ?? const {},
-      );
-    } catch (e) {
-      throw FormatException('Failed to parse Floor from JSON: $e');
-    }
-  }
-
+  factory Floor.fromJson(Map<String, dynamic> json) => _$FloorFromJson(json);
   Map<String, dynamic> toJson() => _$FloorToJson(this);
 
-  // NEW: Helper methods
   List<Landmark> get verticalCirculation => 
       landmarks.where((l) => l.isVerticalCirculation).toList();
   
@@ -284,8 +177,8 @@ class Building {
   final LatLng centerPosition;
   final List<LatLng> boundaryPoints;
   final List<Floor> floors;
-  final List<String> entranceFloorIds; // NEW: Main entrance floors
-  final int defaultFloorLevel; // NEW: Default floor to show
+  final List<String> entranceFloorIds; // Main entrance floors
+  final int defaultFloorLevel; // Default floor to show
   final Map<String, dynamic> properties;
 
   Building({
@@ -299,32 +192,9 @@ class Building {
     this.properties = const {},
   });
 
-  factory Building.fromJson(Map<String, dynamic> json) {
-    try {
-      return Building(
-        id: json['id']?.toString() ?? '',
-        name: json['name']?.toString() ?? '',
-        centerPosition: _parseLatLng(json['centerPosition']),
-        boundaryPoints: _parseLatLngList(json['boundaryPoints']),
-        floors: (json['floors'] as List<dynamic>?)
-            ?.map((e) => Floor.fromJson(e as Map<String, dynamic>))
-            .toList() ?? const [],
-        entranceFloorIds: (json['entranceFloorIds'] as List<dynamic>?)
-            ?.map((e) => e.toString())
-            .toList() ?? const [],
-        defaultFloorLevel: (json['defaultFloorLevel'] is num) 
-            ? json['defaultFloorLevel'].toInt() 
-            : 0,
-        properties: (json['properties'] as Map<String, dynamic>?) ?? const {},
-      );
-    } catch (e) {
-      throw FormatException('Failed to parse Building from JSON: $e');
-    }
-  }
-
+  factory Building.fromJson(Map<String, dynamic> json) => _$BuildingFromJson(json);
   Map<String, dynamic> toJson() => _$BuildingToJson(this);
 
-  // NEW: Helper methods
   Floor? get defaultFloor => floors.where((f) => f.level == defaultFloorLevel).firstOrNull;
   List<Floor> get sortedFloors => [...floors]..sort((a, b) => b.level.compareTo(a.level));
   List<Landmark> get allVerticalCirculation => 
@@ -359,7 +229,7 @@ class RoadSystem {
   final List<Building> buildings;
   final List<Road> outdoorRoads;
   final List<Landmark> outdoorLandmarks;
-  final List<Intersection> outdoorIntersections; // NEW: For road network
+  final List<Intersection> outdoorIntersections;
   final LatLng centerPosition;
   final double zoom;
   final Map<String, dynamic> properties;
@@ -376,35 +246,9 @@ class RoadSystem {
     this.properties = const {},
   });
 
-  factory RoadSystem.fromJson(Map<String, dynamic> json) {
-    try {
-      return RoadSystem(
-        id: json['id']?.toString() ?? '',
-        name: json['name']?.toString() ?? '',
-        buildings: (json['buildings'] as List<dynamic>?)
-            ?.map((e) => Building.fromJson(e as Map<String, dynamic>))
-            .toList() ?? const [],
-        outdoorRoads: (json['outdoorRoads'] as List<dynamic>?)
-            ?.map((e) => Road.fromJson(e as Map<String, dynamic>))
-            .toList() ?? const [],
-        outdoorLandmarks: (json['outdoorLandmarks'] as List<dynamic>?)
-            ?.map((e) => Landmark.fromJson(e as Map<String, dynamic>))
-            .toList() ?? const [],
-        outdoorIntersections: (json['outdoorIntersections'] as List<dynamic>?)
-            ?.map((e) => Intersection.fromJson(e as Map<String, dynamic>))
-            .toList() ?? const [],
-        centerPosition: _parseLatLng(json['centerPosition']),
-        zoom: (json['zoom'] is num) ? json['zoom'].toDouble() : 16.0,
-        properties: (json['properties'] as Map<String, dynamic>?) ?? const {},
-      );
-    } catch (e) {
-      throw FormatException('Failed to parse RoadSystem from JSON: $e');
-    }
-  }
-
+  factory RoadSystem.fromJson(Map<String, dynamic> json) => _$RoadSystemFromJson(json);
   Map<String, dynamic> toJson() => _$RoadSystemToJson(this);
 
-  // NEW: Helper methods for comprehensive data access
   List<Road> get allRoads => [
     ...outdoorRoads,
     ...buildings.expand((b) => b.floors.expand((f) => f.roads)),
@@ -441,8 +285,6 @@ class RoadSystem {
   }
 }
 
-// Additional model classes (keeping existing ones)
-
 @JsonSerializable()
 class Intersection {
   final String id;
@@ -450,7 +292,7 @@ class Intersection {
   final LatLng position;
   final String floorId;
   final List<String> connectedRoadIds;
-  final String type; // 'simple', 'traffic_light', 'stop_sign', 'roundabout'
+  final String type;
   final Map<String, dynamic> properties;
 
   Intersection({
@@ -463,28 +305,29 @@ class Intersection {
     this.properties = const {},
   });
 
-  factory Intersection.fromJson(Map<String, dynamic> json) {
-    try {
-      return Intersection(
-        id: json['id']?.toString() ?? '',
-        name: json['name']?.toString() ?? '',
-        position: _parseLatLng(json['position']),
-        floorId: json['floorId']?.toString() ?? '',
-        connectedRoadIds: (json['connectedRoadIds'] as List<dynamic>?)
-            ?.map((e) => e.toString())
-            .toList() ?? const [],
-        type: json['type']?.toString() ?? 'simple',
-        properties: (json['properties'] as Map<String, dynamic>?) ?? const {},
-      );
-    } catch (e) {
-      throw FormatException('Failed to parse Intersection from JSON: $e');
-    }
-  }
-
+  factory Intersection.fromJson(Map<String, dynamic> json) => _$IntersectionFromJson(json);
   Map<String, dynamic> toJson() => _$IntersectionToJson(this);
 
   bool get isIndoor => floorId.isNotEmpty;
   bool get isOutdoor => floorId.isEmpty;
+
+  Intersection copyWith({
+    String? name,
+    LatLng? position,
+    List<String>? connectedRoadIds,
+    String? type,
+    Map<String, dynamic>? properties,
+  }) {
+    return Intersection(
+      id: id,
+      name: name ?? this.name,
+      position: position ?? this.position,
+      floorId: floorId,
+      connectedRoadIds: connectedRoadIds ?? this.connectedRoadIds,
+      type: type ?? this.type,
+      properties: properties ?? this.properties,
+    );
+  }
 }
 
 @JsonSerializable()
@@ -509,29 +352,7 @@ class NavigationRoute {
     this.floorTransitions = const [],
   });
 
-  factory NavigationRoute.fromJson(Map<String, dynamic> json) {
-    try {
-      return NavigationRoute(
-        id: json['id']?.toString() ?? '',
-        start: _parseLatLng(json['start']),
-        end: _parseLatLng(json['end']),
-        waypoints: _parseLatLngList(json['waypoints']),
-        totalDistance: (json['totalDistance'] is num) 
-            ? json['totalDistance'].toDouble() 
-            : 0.0,
-        instructions: json['instructions']?.toString() ?? '',
-        floorChanges: (json['floorChanges'] as List<dynamic>?)
-            ?.map((e) => e.toString())
-            .toList() ?? const [],
-        floorTransitions: (json['floorTransitions'] as List<dynamic>?)
-            ?.map((e) => FloorTransition.fromJson(e as Map<String, dynamic>))
-            .toList() ?? const [],
-      );
-    } catch (e) {
-      throw FormatException('Failed to parse NavigationRoute from JSON: $e');
-    }
-  }
-
+  factory NavigationRoute.fromJson(Map<String, dynamic> json) => _$NavigationRouteFromJson(json);
   Map<String, dynamic> toJson() => _$NavigationRouteToJson(this);
 }
 
@@ -539,39 +360,37 @@ class NavigationRoute {
 class FloorTransition {
   final String fromFloorId;
   final String toFloorId;
-  final String buildingId;
-  final LatLng transitionPoint;
-  final String transitionType; // 'elevator', 'stairs', 'escalator', 'ramp'
-  final String landmarkId; // ID of the elevator/stairs landmark
-  final String instructions;
+  final String transitionType; // 'elevator', 'stairs'
+  final LatLng position;
+  final String landmarkId;
 
   FloorTransition({
     required this.fromFloorId,
     required this.toFloorId,
-    required this.buildingId,
-    required this.transitionPoint,
     required this.transitionType,
+    required this.position,
     required this.landmarkId,
-    this.instructions = '',
   });
 
-  factory FloorTransition.fromJson(Map<String, dynamic> json) {
-    try {
-      return FloorTransition(
-        fromFloorId: json['fromFloorId']?.toString() ?? '',
-        toFloorId: json['toFloorId']?.toString() ?? '',
-        buildingId: json['buildingId']?.toString() ?? '',
-        transitionPoint: _parseLatLng(json['transitionPoint']),
-        transitionType: json['transitionType']?.toString() ?? '',
-        landmarkId: json['landmarkId']?.toString() ?? '',
-        instructions: json['instructions']?.toString() ?? '',
-      );
-    } catch (e) {
-      throw FormatException('Failed to parse FloorTransition from JSON: $e');
-    }
+  factory FloorTransition.fromJson(Map<String, dynamic> json) => _$FloorTransitionFromJson(json);
+  Map<String, dynamic> toJson() => _$FloorTransitionToJson(this);
+}
+
+// LatLng JSON serialization extension
+extension LatLngJson on LatLng {
+  static LatLng fromJson(Map<String, dynamic> json) {
+    return LatLng(
+      (json['latitude'] as num).toDouble(),
+      (json['longitude'] as num).toDouble(),
+    );
   }
 
-  Map<String, dynamic> toJson() => _$FloorTransitionToJson(this);
+  Map<String, dynamic> toJson() {
+    return {
+      'latitude': latitude,
+      'longitude': longitude,
+    };
+  }
 }
 
 // Extension to add firstOrNull functionality for better null safety
