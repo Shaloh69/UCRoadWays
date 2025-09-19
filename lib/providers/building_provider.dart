@@ -102,34 +102,6 @@ class BuildingProvider extends ChangeNotifier {
     return roadSystem.allFloors;
   }
 
-  // Get buildings with floor count
-  List<Map<String, dynamic>> getBuildingsSummary(RoadSystem? roadSystem) {
-    if (roadSystem == null) return [];
-    
-    return roadSystem.buildings.map((building) => {
-      'building': building,
-      'floorCount': building.floors.length,
-      'hasElevator': building.floors.any((f) => 
-          f.landmarks.any((l) => l.type == 'elevator')),
-      'hasStairs': building.floors.any((f) => 
-          f.landmarks.any((l) => l.type == 'stairs')),
-      'isSelected': building.id == _selectedBuildingId,
-    }).toList();
-  }
-
-  // Get floor statistics
-  Map<String, int> getFloorStatistics(Floor floor) {
-    return {
-      'roads': floor.roads.length,
-      'landmarks': floor.landmarks.length,
-      'elevators': floor.landmarks.where((l) => l.type == 'elevator').length,
-      'stairs': floor.landmarks.where((l) => l.type == 'stairs').length,
-      'bathrooms': floor.landmarks.where((l) => l.type == 'bathroom').length,
-      'classrooms': floor.landmarks.where((l) => l.type == 'classroom').length,
-      'offices': floor.landmarks.where((l) => l.type == 'office').length,
-    };
-  }
-
   // Check if current floor has vertical circulation
   bool hasVerticalCirculation(RoadSystem? roadSystem) {
     final floor = getSelectedFloor(roadSystem);
@@ -264,15 +236,14 @@ class BuildingProvider extends ChangeNotifier {
       'multiFloor': building.floors.length > 1,
     };
   }
+
+  getFloorStatistics(Floor floor) {
+    // Need Implementation
+    // For now, return null
+  return null;
+  }
+
+  
 }
 
-// Extension to add firstOrNull functionality for better null safety
-extension IterableExtension<T> on Iterable<T> {
-  T? get firstOrNull {
-    final iterator = this.iterator;
-    if (iterator.moveNext()) {
-      return iterator.current;
-    }
-    return null;
-  }
-}
+// NOTE: IterableExtension removed from here to avoid conflict with models.dart

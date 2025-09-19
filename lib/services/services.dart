@@ -85,33 +85,148 @@ class LocationService {
 
 class DataStorageService {
   static const String _roadSystemsKey = 'road_systems';
-  static const String _currentSystemKey = 'current_system';
+  static const String _currentSystemKey = 'current_system_id';
 
+  /// Save road systems with enhanced error handling
   static Future<void> saveRoadSystems(List<RoadSystem> systems) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final systemsJson = systems.map((system) => system.toJson()).toList();
-      await prefs.setString(_roadSystemsKey, jsonEncode(systemsJson));
+      final systemsJson = systems.map((system) {
+        try {
+          return system.toJson();
+        } catch (e) {
+          print('Error serializing road system ${system.id}: $e');
+          return null;
+        }
+      }).where((json) => json != null).toList();
+      
+      final jsonString = jsonEncode(systemsJson);
+      await prefs.setString(_roadSystemsKey, jsonString);
+      print('Successfully saved ${systemsJson.length} road systems');
     } catch (e) {
       print('Error saving road systems: $e');
       rethrow;
     }
   }
 
+  /// Load road systems with enhanced error handling and data validation
   static Future<List<RoadSystem>> loadRoadSystems() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final systemsJson = prefs.getString(_roadSystemsKey);
-      if (systemsJson != null) {
+      
+      if (systemsJson != null && systemsJson.isNotEmpty) {
         final List<dynamic> systemsList = jsonDecode(systemsJson);
-        return systemsList
-            .map((json) => RoadSystem.fromJson(json))
-            .toList();
+        final List<RoadSystem> loadedSystems = [];
+        
+        for (int i = 0; i < systemsList.length; i++) {
+          try {
+            final systemData = systemsList[i];
+            if (systemData != null && systemData is Map<String, dynamic>) {
+              // Validate required fields before parsing
+              if (_validateRoadSystemData(systemData)) {
+                final system = RoadSystem.fromJson(systemData);
+                loadedSystems.add(system);
+              } else {
+                print('Skipping invalid road system at index $i: missing required fields');
+              }
+            } else {
+              print('Skipping malformed road system data at index $i');
+            }
+          } catch (e) {
+            print('Error parsing road system at index $i: $e');
+            // Continue loading other systems even if one fails
+          }
+        }
+        
+        print('Successfully loaded ${loadedSystems.length} road systems');
+        return loadedSystems;
       }
     } catch (e) {
       print('Error loading road systems: $e');
     }
     return [];
+  }
+
+  /// Validate road system data before parsing
+  static bool _validateRoadSystemData(Map<String, dynamic> data) {
+    // Check required fields
+    if (data['id'] == null || data['name'] == null || data['centerPosition'] == null) {
+      return false;
+    }
+    
+    // Validate centerPosition format
+    final centerPos = data['centerPosition'];
+    if (centerPos is Map<String, dynamic>) {
+      if (centerPos['latitude'] == null || centerPos['longitude'] == null) {
+        return false;
+      }
+    } else if (centerPos is List) {
+      if (centerPos.length < 2) {
+        return false;
+      }
+    } else {
+      return false;
+    }
+    
+    return true;
+  }
+
+  /// Validate and fix coordinate data
+  static Map<String, dynamic> _sanitizeCoordinateData(Map<String, dynamic> data) {
+    // Fix centerPosition if needed
+    if (data['centerPosition'] != null) {
+      data['centerPosition'] = _sanitizeLatLngData(data['centerPosition']);
+    }
+    
+    // Fix boundaryPoints if present
+    if (data['boundaryPoints'] is List) {
+      final List<dynamic> points = data['boundaryPoints'];
+      data['boundaryPoints'] = points.map((point) => _sanitizeLatLngData(point)).toList();
+    }
+    
+    // Fix building coordinates
+    if (data['buildings'] is List) {
+      final List<dynamic> buildings = data['buildings'];
+      data['buildings'] = buildings.map((building) {
+        if (building is Map<String, dynamic>) {
+          return _sanitizeCoordinateData(building);
+        }
+        return building;
+      }).toList();
+    }
+    
+    // Fix outdoor roads
+    if (data['outdoorRoads'] is List) {
+      final List<dynamic> roads = data['outdoorRoads'];
+      data['outdoorRoads'] = roads.map((road) {
+        if (road is Map<String, dynamic> && road['points'] is List) {
+          final List<dynamic> points = road['points'];
+          road['points'] = points.map((point) => _sanitizeLatLngData(point)).toList();
+        }
+        return road;
+      }).toList();
+    }
+    
+    return data;
+  }
+
+  /// Sanitize individual LatLng data
+  static dynamic _sanitizeLatLngData(dynamic latlngData) {
+    if (latlngData == null) return null;
+    
+    if (latlngData is Map<String, dynamic>) {
+      // Standard format: {"latitude": 33.9737, "longitude": -117.3281}
+      return latlngData;
+    } else if (latlngData is List && latlngData.length >= 2) {
+      // Convert array format to standard format
+      return {
+        'latitude': latlngData[1],
+        'longitude': latlngData[0],
+      };
+    }
+    
+    return latlngData;
   }
 
   static Future<void> setCurrentRoadSystem(String systemId) async {
@@ -134,21 +249,40 @@ class DataStorageService {
     }
   }
 
+  /// Export road system to JSON with error handling
   static Future<String?> exportRoadSystemToJson(RoadSystem system) async {
     try {
       final directory = await getApplicationDocumentsDirectory();
       final fileName = '${system.name.replaceAll(' ', '_')}_roadways_${DateTime.now().millisecondsSinceEpoch}.json';
       final file = File('${directory.path}/$fileName');
       
-      final geoJsonData = {
-        'type': 'FeatureCollection',
-        'features': [
-          // Buildings
-          ...system.buildings.map((building) => {
+      final geoJsonData = _buildGeoJsonData(system);
+      final jsonString = const JsonEncoder.withIndent('  ').convert(geoJsonData);
+      
+      await file.writeAsString(jsonString);
+      return file.path;
+    } catch (e) {
+      print('Error exporting road system: $e');
+      return null;
+    }
+  }
+
+  /// Build GeoJSON data with safe coordinate handling
+  static Map<String, dynamic> _buildGeoJsonData(RoadSystem system) {
+    final features = <Map<String, dynamic>>[];
+    
+    try {
+      // Buildings
+      for (final building in system.buildings) {
+        try {
+          features.add({
             'type': 'Feature',
             'geometry': {
               'type': 'Point',
-              'coordinates': [building.centerPosition.longitude, building.centerPosition.latitude],
+              'coordinates': [
+                building.centerPosition.longitude,
+                building.centerPosition.latitude
+              ],
             },
             'properties': {
               'type': 'building',
@@ -157,31 +291,51 @@ class DataStorageService {
               'floors': building.floors.length,
               ...building.properties,
             }
-          }),
-          // Outdoor roads
-          ...system.outdoorRoads.map((road) => {
-            'type': 'Feature',
-            'geometry': {
-              'type': 'LineString',
-              'coordinates': road.points.map((point) => [point.longitude, point.latitude]).toList(),
-            },
-            'properties': {
-              'type': 'road',
-              'name': road.name,
-              'id': road.id,
-              'roadType': road.type,
-              'width': road.width,
-              'isOneWay': road.isOneWay,
-              'floorId': road.floorId,
-              ...road.properties,
-            }
-          }),
-          // Outdoor landmarks
-          ...system.outdoorLandmarks.map((landmark) => {
+          });
+        } catch (e) {
+          print('Error processing building ${building.id}: $e');
+        }
+      }
+      
+      // Outdoor roads
+      for (final road in system.outdoorRoads) {
+        try {
+          if (road.points.isNotEmpty) {
+            features.add({
+              'type': 'Feature',
+              'geometry': {
+                'type': 'LineString',
+                'coordinates': road.points.map((point) => 
+                    [point.longitude, point.latitude]).toList(),
+              },
+              'properties': {
+                'type': 'road',
+                'name': road.name,
+                'id': road.id,
+                'roadType': road.type,
+                'width': road.width,
+                'isOneWay': road.isOneWay,
+                'floorId': road.floorId,
+                ...road.properties,
+              }
+            });
+          }
+        } catch (e) {
+          print('Error processing outdoor road ${road.id}: $e');
+        }
+      }
+      
+      // Outdoor landmarks
+      for (final landmark in system.outdoorLandmarks) {
+        try {
+          features.add({
             'type': 'Feature',
             'geometry': {
               'type': 'Point',
-              'coordinates': [landmark.position.longitude, landmark.position.latitude],
+              'coordinates': [
+                landmark.position.longitude,
+                landmark.position.latitude
+              ],
             },
             'properties': {
               'type': 'landmark',
@@ -192,38 +346,57 @@ class DataStorageService {
               'floorId': landmark.floorId,
               ...landmark.properties,
             }
-          }),
-          // Indoor elements from all buildings and floors
-          ...system.buildings.expand((building) => 
-            building.floors.expand((floor) => [
-              // Indoor roads
-              ...floor.roads.map((road) => {
-                'type': 'Feature',
-                'geometry': {
-                  'type': 'LineString',
-                  'coordinates': road.points.map((point) => [point.longitude, point.latitude]).toList(),
-                },
-                'properties': {
-                  'type': 'indoor_road',
-                  'name': road.name,
-                  'id': road.id,
-                  'roadType': road.type,
-                  'width': road.width,
-                  'isOneWay': road.isOneWay,
-                  'floorId': road.floorId,
-                  'buildingId': building.id,
-                  'buildingName': building.name,
-                  'floorName': floor.name,
-                  'floorLevel': floor.level,
-                  ...road.properties,
-                }
-              }),
-              // Indoor landmarks
-              ...floor.landmarks.map((landmark) => {
+          });
+        } catch (e) {
+          print('Error processing outdoor landmark ${landmark.id}: $e');
+        }
+      }
+      
+      // Indoor elements from all buildings and floors
+      for (final building in system.buildings) {
+        for (final floor in building.floors) {
+          // Indoor roads
+          for (final road in floor.roads) {
+            try {
+              if (road.points.isNotEmpty) {
+                features.add({
+                  'type': 'Feature',
+                  'geometry': {
+                    'type': 'LineString',
+                    'coordinates': road.points.map((point) => 
+                        [point.longitude, point.latitude]).toList(),
+                  },
+                  'properties': {
+                    'type': 'indoor_road',
+                    'name': road.name,
+                    'id': road.id,
+                    'roadType': road.type,
+                    'width': road.width,
+                    'isOneWay': road.isOneWay,
+                    'floorId': road.floorId,
+                    'buildingId': building.id,
+                    'floorLevel': floor.level,
+                    'floorName': floor.name,
+                    ...road.properties,
+                  }
+                });
+              }
+            } catch (e) {
+              print('Error processing indoor road ${road.id}: $e');
+            }
+          }
+          
+          // Indoor landmarks
+          for (final landmark in floor.landmarks) {
+            try {
+              features.add({
                 'type': 'Feature',
                 'geometry': {
                   'type': 'Point',
-                  'coordinates': [landmark.position.longitude, landmark.position.latitude],
+                  'coordinates': [
+                    landmark.position.longitude,
+                    landmark.position.latitude
+                  ],
                 },
                 'properties': {
                   'type': 'indoor_landmark',
@@ -233,85 +406,120 @@ class DataStorageService {
                   'id': landmark.id,
                   'floorId': landmark.floorId,
                   'buildingId': building.id,
-                  'buildingName': building.name,
-                  'floorName': floor.name,
                   'floorLevel': floor.level,
+                  'floorName': floor.name,
+                  'isVerticalCirculation': landmark.isVerticalCirculation,
+                  'connectedFloors': landmark.connectedFloors,
                   ...landmark.properties,
                 }
-              }),
-            ])
-          ),
-        ],
-        'metadata': {
-          'name': system.name,
-          'id': system.id,
-          'center': [system.centerPosition.longitude, system.centerPosition.latitude],
-          'zoom': system.zoom,
-          'exported': DateTime.now().toIso8601String(),
-          'exportedBy': 'UCRoadWays',
-          'version': '1.0.0',
-          'buildingCount': system.buildings.length,
-          'outdoorRoadCount': system.outdoorRoads.length,
-          'outdoorLandmarkCount': system.outdoorLandmarks.length,
-          ...system.properties,
+              });
+            } catch (e) {
+              print('Error processing indoor landmark ${landmark.id}: $e');
+            }
+          }
         }
-      };
-
-      await file.writeAsString(jsonEncode(geoJsonData));
-      return file.path;
+      }
     } catch (e) {
-      print('Error exporting road system: $e');
-      return null;
+      print('Error building GeoJSON features: $e');
     }
+    
+    return {
+      'type': 'FeatureCollection',
+      'name': '${system.name} - UC RoadWays Export',
+      'crs': {
+        'type': 'name',
+        'properties': {
+          'name': 'urn:ogc:def:crs:OGC:1.3:CRS84'
+        }
+      },
+      'features': features,
+      'metadata': {
+        'exported_at': DateTime.now().toIso8601String(),
+        'system_id': system.id,
+        'system_name': system.name,
+        'center_latitude': system.centerPosition.latitude,
+        'center_longitude': system.centerPosition.longitude,
+        'building_count': system.buildings.length,
+        'outdoor_road_count': system.outdoorRoads.length,
+        'outdoor_landmark_count': system.outdoorLandmarks.length,
+        'total_floors': system.allFloors.length,
+        'app_version': '1.0.0',
+      }
+    };
   }
 
+  /// Import road system from JSON with enhanced validation
   static Future<RoadSystem?> importRoadSystemFromJson() async {
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['json'],
-        allowMultiple: false,
       );
 
       if (result != null && result.files.single.path != null) {
         final file = File(result.files.single.path!);
-        final content = await file.readAsString();
-        final data = jsonDecode(content);
-
-        // Basic validation
-        if (data['type'] != 'FeatureCollection') {
-          throw Exception('Invalid GeoJSON format');
+        final jsonString = await file.readAsString();
+        
+        try {
+          final Map<String, dynamic> jsonData = jsonDecode(jsonString);
+          
+          // Validate and sanitize the data
+          if (_validateRoadSystemData(jsonData)) {
+            final sanitizedData = _sanitizeCoordinateData(jsonData);
+            return RoadSystem.fromJson(sanitizedData);
+          } else {
+            print('Invalid road system data format');
+            return null;
+          }
+        } catch (e) {
+          print('Error parsing JSON data: $e');
+          return null;
         }
-
-        // Extract metadata
-        final metadata = data['metadata'] as Map<String, dynamic>? ?? {};
-        final systemName = metadata['name'] as String? ?? 'Imported System';
-        final systemId = metadata['id'] as String? ?? DateTime.now().millisecondsSinceEpoch.toString();
-        
-        // Extract center coordinates
-        final centerCoords = metadata['center'] as List<dynamic>?;
-        final centerPosition = centerCoords != null && centerCoords.length >= 2
-            ? LatLng(centerCoords[1].toDouble(), centerCoords[0].toDouble())
-            : const LatLng(33.9737, -117.3281); // Default to UC Riverside
-        
-        final zoom = (metadata['zoom'] as num?)?.toDouble() ?? 16.0;
-
-        // For now, create a basic road system with just the metadata
-        // In a full implementation, you'd parse all the features
-        final importedSystem = RoadSystem(
-          id: systemId,
-          name: systemName,
-          centerPosition: centerPosition,
-          zoom: zoom,
-          properties: Map<String, dynamic>.from(metadata)..remove('center'),
-        );
-
-        return importedSystem;
       }
     } catch (e) {
       print('Error importing road system: $e');
-      rethrow;
     }
     return null;
+  }
+
+  /// Clear all data with confirmation
+  static Future<void> clearAllData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_roadSystemsKey);
+      await prefs.remove(_currentSystemKey);
+      print('All road system data cleared');
+    } catch (e) {
+      print('Error clearing data: $e');
+      rethrow;
+    }
+  }
+
+  /// Get storage size information
+  static Future<Map<String, dynamic>> getStorageInfo() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final systemsJson = prefs.getString(_roadSystemsKey);
+      
+      final info = {
+        'has_data': systemsJson != null,
+        'data_size_bytes': systemsJson?.length ?? 0,
+        'data_size_kb': ((systemsJson?.length ?? 0) / 1024).toStringAsFixed(2),
+      };
+      
+      if (systemsJson != null) {
+        try {
+          final List<dynamic> systemsList = jsonDecode(systemsJson);
+          info['system_count'] = systemsList.length;
+        } catch (e) {
+          info['system_count'] = 0;
+          info['parse_error'] = e.toString();
+        }
+      }
+      
+      return info;
+    } catch (e) {
+      return {'error': e.toString()};
+    }
   }
 }
