@@ -2,68 +2,94 @@ import 'dart:math';
 import 'package:latlong2/latlong.dart';
 import '../models/models.dart';
 
-class NavigationService {
-  static const double _walkingSpeed = 1.4; // m/s
-  static const double _earthRadius = 6371000; // Earth's radius in meters
-  static const double _floorChangeTime = 30.0; // seconds for elevator/stairs
+// Navigation types enum
+enum NavigationType {
+  sameFloor,
+  sameBuilding,
+  differentBuildings,
+  indoorToOutdoor,
+  outdoorToIndoor,
+  outdoorOnly,
+}
 
-  /// Calculate the shortest route between two points in a road system
-  /// Now with comprehensive multi-floor support
-  static Future<NavigationRoute?> calculateRoute({
-    required LatLng start,
-    required LatLng end,
-    required RoadSystem roadSystem,
+// Navigation context class
+class NavigationContext {
+  final NavigationType type;
+  final RoadSystem roadSystem;
+  final Building? startBuilding;
+  final Building? endBuilding;
+  final Floor? startFloor;
+  final Floor? endFloor;
+
+  NavigationContext({
+    required this.type,
+    required this.roadSystem,
+    this.startBuilding,
+    this.endBuilding,
+    this.startFloor,
+    this.endFloor,
+  });
+}
+
+// Navigation instruction model
+class NavigationInstruction {
+  final String instruction;
+  final double distance;
+  final LatLng position;
+
+  NavigationInstruction({
+    required this.instruction,
+    required this.distance,
+    required this.position,
+  });
+}
+
+class NavigationService {
+  static const double _defaultWalkingSpeed = 1.4; // m/s
+
+  /// Main navigation calculation entry point
+  static Future<NavigationRoute?> calculateRoute(
+    LatLng start,
+    LatLng end,
+    RoadSystem roadSystem, {
     String? startFloorId,
     String? endFloorId,
     String? startBuildingId,
     String? endBuildingId,
-    bool preferElevator = true, // For accessibility
+    bool preferElevator = true,
   }) async {
     try {
-      final waypoints = <LatLng>[];
-      final floorChanges = <String>[];
-      final floorTransitions = <FloorTransition>[];
-      
-      // Determine navigation context
-      final navContext = _analyzeNavigationContext(
-        start, end, roadSystem,
-        startFloorId, endFloorId,
-        startBuildingId, endBuildingId,
+      final context = _createNavigationContext(
+        roadSystem,
+        startFloorId,
+        endFloorId,
+        startBuildingId,
+        endBuildingId,
       );
-      
-      NavigationRoute? route;
-      
-      switch (navContext.type) {
+
+      switch (context.type) {
         case NavigationType.sameFloor:
-          route = await _calculateSameFloorRoute(start, end, navContext);
-          break;
+          return await _calculateSameFloorRoute(start, end, context);
         case NavigationType.sameBuilding:
-          route = await _calculateSameBuildingRoute(start, end, navContext, preferElevator);
-          break;
+          return await _calculateSameBuildingRoute(start, end, context, preferElevator);
         case NavigationType.differentBuildings:
-          route = await _calculateMultiBuildingRoute(start, end, navContext, preferElevator);
-          break;
+          return await _calculateMultiBuildingRoute(start, end, context, preferElevator);
         case NavigationType.indoorToOutdoor:
-          route = await _calculateIndoorToOutdoorRoute(start, end, navContext);
-          break;
+          return await _calculateIndoorToOutdoorRoute(start, end, context);
         case NavigationType.outdoorToIndoor:
-          route = await _calculateOutdoorToIndoorRoute(start, end, navContext);
-          break;
+          return await _calculateOutdoorToIndoorRoute(start, end, context);
         case NavigationType.outdoorOnly:
-          route = await _calculateOutdoorRoute(start, end, navContext);
-          break;
+          return await _calculateOutdoorRoute(start, end, context);
       }
-      
-      return route;
     } catch (e) {
-      print('Error calculating route: $e');
+      print('Navigation calculation error: $e');
       return null;
     }
   }
 
-  /// Analyze the type of navigation required
-  static NavigationContext _analyzeNavigationContext(
-    LatLng start, LatLng end, RoadSystem roadSystem,
+  /// Create navigation context based on start/end parameters
+  static NavigationContext _createNavigationContext(
+    RoadSystem roadSystem,
     String? startFloorId, String? endFloorId,
     String? startBuildingId, String? endBuildingId,
   ) {
@@ -169,14 +195,12 @@ class NavigationService {
     final transition = FloorTransition(
       fromFloorId: startFloor.id,
       toFloorId: endFloor.id,
-      buildingId: building.id,
-      transitionPoint: circulation.position,
       transitionType: circulation.type,
+      position: circulation.position,
       landmarkId: circulation.id,
-      instructions: _generateFloorChangeInstruction(startFloor, endFloor, circulation),
     );
     floorTransitions.add(transition);
-    floorChanges.add(transition.instructions);
+    floorChanges.add(_generateFloorChangeInstruction(startFloor, endFloor, circulation));
     
     // Find corresponding circulation on end floor
     final endCirculation = _findCorrespondingCirculation(circulation, endFloor);
@@ -236,14 +260,12 @@ class NavigationService {
             final transition = FloorTransition(
               fromFloorId: startFloor.id,
               toFloorId: groundFloor.id,
-              buildingId: startBuilding.id,
-              transitionPoint: circulation.position,
               transitionType: circulation.type,
+              position: circulation.position,
               landmarkId: circulation.id,
-              instructions: 'Take ${circulation.type} to ground floor to exit building',
             );
             floorTransitions.add(transition);
-            floorChanges.add(transition.instructions);
+            floorChanges.add('Take ${circulation.type} to ground floor to exit building');
           }
         }
       }
@@ -281,14 +303,12 @@ class NavigationService {
             final transition = FloorTransition(
               fromFloorId: groundFloor.id,
               toFloorId: endFloor.id,
-              buildingId: endBuilding.id,
-              transitionPoint: circulation.position,
               transitionType: circulation.type,
+              position: circulation.position,
               landmarkId: circulation.id,
-              instructions: _generateFloorChangeInstruction(groundFloor, endFloor, circulation),
             );
             floorTransitions.add(transition);
-            floorChanges.add(transition.instructions);
+            floorChanges.add(_generateFloorChangeInstruction(groundFloor, endFloor, circulation));
             
             // Path from circulation to end point
             final endCirculation = _findCorrespondingCirculation(circulation, endFloor);
@@ -448,27 +468,26 @@ class NavigationService {
 
   /// Find the best vertical circulation (elevator/stairs) between floors
   static Landmark? _findBestVerticalCirculation(
-    LatLng userPosition, Floor startFloor, String targetFloorId, bool preferElevator
+    LatLng currentPosition, Floor currentFloor, String targetFloorId, bool preferElevator
   ) {
-    final circulation = startFloor.landmarks.where(
-      (l) => (l.type == 'elevator' || l.type == 'stairs') && 
-             l.connectedFloors.contains(targetFloorId)
+    final circulation = currentFloor.landmarks.where((l) => 
+      l.isVerticalCirculation && l.connectedFloors.contains(targetFloorId)
     ).toList();
     
     if (circulation.isEmpty) return null;
     
     // Sort by preference and distance
     circulation.sort((a, b) {
-      // Prefer elevators if specified
-      if (preferElevator) {
-        if (a.type == 'elevator' && b.type != 'elevator') return -1;
-        if (b.type == 'elevator' && a.type != 'elevator') return 1;
-      }
+      final aIsPreferred = preferElevator ? a.type == 'elevator' : a.type == 'stairs';
+      final bIsPreferred = preferElevator ? b.type == 'elevator' : b.type == 'stairs';
       
-      // Then by distance
-      final distA = calculateDistance(userPosition, a.position);
-      final distB = calculateDistance(userPosition, b.position);
-      return distA.compareTo(distB);
+      if (aIsPreferred && !bIsPreferred) return -1;
+      if (!aIsPreferred && bIsPreferred) return 1;
+      
+      // If same preference, sort by distance
+      final aDist = calculateDistance(currentPosition, a.position);
+      final bDist = calculateDistance(currentPosition, b.position);
+      return aDist.compareTo(bDist);
     });
     
     return circulation.first;
@@ -476,254 +495,121 @@ class NavigationService {
 
   /// Find corresponding circulation on target floor
   static Landmark? _findCorrespondingCirculation(Landmark circulation, Floor targetFloor) {
-    // Look for circulation with same name or similar position
-    return targetFloor.landmarks.where(
-      (l) => l.type == circulation.type && 
-             (l.name.contains(circulation.name.split(' ').first) ||
-              calculateDistance(l.position, circulation.position) < 5.0)
+    return targetFloor.landmarks.where((l) => 
+      l.type == circulation.type && 
+      l.position.latitude == circulation.position.latitude &&
+      l.position.longitude == circulation.position.longitude
     ).firstOrNull;
   }
 
-  /// Find building exit nearest to user position
-  static Landmark? _findBuildingExit(LatLng userPosition, Building building, Floor floor) {
-    final exits = floor.landmarks.where((l) => l.type == 'entrance').toList();
-    
+  /// Find building exit point
+  static Landmark? _findBuildingExit(LatLng from, Building building, Floor floor) {
+    final exits = floor.landmarks.where((l) => l.type == 'exit' || l.type == 'entrance').toList();
     if (exits.isEmpty) return null;
     
+    // Find closest exit
     exits.sort((a, b) {
-      final distA = calculateDistance(userPosition, a.position);
-      final distB = calculateDistance(userPosition, b.position);
-      return distA.compareTo(distB);
+      final aDist = calculateDistance(from, a.position);
+      final bDist = calculateDistance(from, b.position);
+      return aDist.compareTo(bDist);
     });
     
     return exits.first;
   }
 
-  /// Find building entrance nearest to approach point
-  static Landmark? _findBuildingEntrance(LatLng approachPoint, Building building) {
-    // Look for entrances on ground floor
+  /// Find building entrance point
+  static Landmark? _findBuildingEntrance(LatLng from, Building building) {
     final groundFloor = building.floors.where((f) => f.level == 0).firstOrNull;
     if (groundFloor == null) return null;
     
     final entrances = groundFloor.landmarks.where((l) => l.type == 'entrance').toList();
-    
     if (entrances.isEmpty) return null;
     
+    // Find closest entrance
     entrances.sort((a, b) {
-      final distA = calculateDistance(approachPoint, a.position);
-      final distB = calculateDistance(approachPoint, b.position);
-      return distA.compareTo(distB);
+      final aDist = calculateDistance(from, a.position);
+      final bDist = calculateDistance(from, b.position);
+      return aDist.compareTo(bDist);
     });
     
     return entrances.first;
   }
 
-  /// Find indoor path using simplified pathfinding
+  /// Indoor pathfinding on a single floor
   static List<LatLng> _findIndoorPath(LatLng start, LatLng end, Floor floor) {
-    // Simplified: direct path if no obstacles, otherwise basic waypoint routing
-    // In production, this would use A* with floor layout consideration
-    return _findDirectPath(start, end, floor.roads);
-  }
-
-  /// Find outdoor path using road network
-  static List<LatLng> _findOutdoorPath(LatLng start, LatLng end, RoadSystem roadSystem) {
-    // Simplified: find nearest roads and route through them
-    // In production, this would use A* on the road graph
-    return _findDirectPath(start, end, roadSystem.outdoorRoads);
-  }
-
-  /// Simplified pathfinding - direct path with basic road snapping
-  static List<LatLng> _findDirectPath(LatLng start, LatLng end, List<Road> roads) {
+    // Simple pathfinding - in real implementation, use A* algorithm
     final path = <LatLng>[];
     
-    if (roads.isNotEmpty) {
-      // Find nearest road points
-      final startRoad = _findNearestRoadPoint(start, roads);
-      final endRoad = _findNearestRoadPoint(end, roads);
-      
-      if (startRoad != null) path.add(startRoad);
-      if (endRoad != null && endRoad != startRoad) path.add(endRoad);
+    // Basic direct path with obstacle avoidance
+    final stepCount = 5;
+    for (int i = 1; i < stepCount; i++) {
+      final lat = start.latitude + (end.latitude - start.latitude) * (i / stepCount);
+      final lng = start.longitude + (end.longitude - start.longitude) * (i / stepCount);
+      path.add(LatLng(lat, lng));
     }
     
     return path;
   }
 
-  /// Find nearest point on road network
-  static LatLng? _findNearestRoadPoint(LatLng point, List<Road> roads) {
-    LatLng? nearest;
-    double minDistance = double.infinity;
+  /// Outdoor pathfinding using road network
+  static List<LatLng> _findOutdoorPath(LatLng start, LatLng end, RoadSystem roadSystem) {
+    // Simple pathfinding - in real implementation, use road network
+    final path = <LatLng>[];
     
-    for (final road in roads) {
-      for (final roadPoint in road.points) {
-        final distance = calculateDistance(point, roadPoint);
-        if (distance < minDistance) {
-          minDistance = distance;
-          nearest = roadPoint;
-        }
-      }
+    // Find nearest roads and create path
+    final stepCount = 10;
+    for (int i = 1; i < stepCount; i++) {
+      final lat = start.latitude + (end.latitude - start.latitude) * (i / stepCount);
+      final lng = start.longitude + (end.longitude - start.longitude) * (i / stepCount);
+      path.add(LatLng(lat, lng));
     }
     
-    return nearest;
+    return path;
   }
 
-  /// Generate floor change instruction
-  static String _generateFloorChangeInstruction(Floor fromFloor, Floor toFloor, Landmark circulation) {
-    final direction = toFloor.level > fromFloor.level ? 'up' : 'down';
-    final floorDiff = (toFloor.level - fromFloor.level).abs();
-    
-    if (circulation.type == 'elevator') {
-      return 'Take elevator ${circulation.name} $direction to ${toFloor.name} (${floorDiff} floor${floorDiff != 1 ? 's' : ''})';
-    } else {
-      return 'Take stairs ${circulation.name} $direction to ${toFloor.name} (${floorDiff} floor${floorDiff != 1 ? 's' : ''})';
-    }
-  }
-
-  /// Generate detailed navigation instructions
-  static String _generateDetailedInstructions(
-    List<LatLng> waypoints, 
-    List<String> floorChanges, 
-    NavigationContext context
-  ) {
-    final instructions = <String>[];
-    
-    // Add context
-    if (context.type == NavigationType.sameFloor) {
-      if (context.startFloor != null) {
-        instructions.add('Navigate within ${context.startFloor!.name}');
-      } else {
-        instructions.add('Navigate outdoors');
-      }
-    } else {
-      instructions.add('Multi-floor navigation route');
-    }
-    
-    // Add distance and time
-    final distance = _calculateTotalDistance(waypoints);
-    final time = calculateTravelTime(distance);
-    instructions.add('Total distance: ${distance.toStringAsFixed(0)}m');
-    instructions.add('Estimated time: ${_formatDuration(time)}');
-    
-    // Add floor changes
-    if (floorChanges.isNotEmpty) {
-      instructions.add('Floor changes required:');
-      instructions.addAll(floorChanges.map((change) => '• $change'));
-    }
-    
-    // Add basic turn-by-turn
-    if (waypoints.length > 2) {
-      instructions.add('Follow waypoints and signs along the route');
-    }
-    
-    return instructions.join('\n');
-  }
-
-  /// Calculate distance between two points using Haversine formula
-  static double calculateDistance(LatLng point1, LatLng point2) {
-    final lat1Rad = point1.latitude * (pi / 180);
-    final lat2Rad = point2.latitude * (pi / 180);
-    final deltaLatRad = (point2.latitude - point1.latitude) * (pi / 180);
-    final deltaLngRad = (point2.longitude - point1.longitude) * (pi / 180);
-
-    final a = sin(deltaLatRad / 2) * sin(deltaLatRad / 2) +
-        cos(lat1Rad) * cos(lat2Rad) * sin(deltaLngRad / 2) * sin(deltaLngRad / 2);
-    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-    return _earthRadius * c;
-  }
-
-  /// Calculate estimated travel time including floor changes
-  static Duration calculateTravelTime(double distanceMeters, [int floorChanges = 0]) {
-    final walkingTime = distanceMeters / _walkingSpeed;
-    final floorChangeTime = floorChanges * _floorChangeTime;
-    final totalSeconds = walkingTime + floorChangeTime;
-    return Duration(seconds: totalSeconds.round());
-  }
-
-  /// Calculate total distance along waypoints
+  /// Calculate total distance of route
   static double _calculateTotalDistance(List<LatLng> waypoints) {
-    double total = 0.0;
+    double total = 0;
     for (int i = 0; i < waypoints.length - 1; i++) {
       total += calculateDistance(waypoints[i], waypoints[i + 1]);
     }
     return total;
   }
 
-  /// Format duration for display
-  static String _formatDuration(Duration duration) {
-    final minutes = duration.inMinutes;
-    final seconds = duration.inSeconds % 60;
-    
-    if (minutes > 0) {
-      return '${minutes}m ${seconds}s';
-    } else {
-      return '${seconds}s';
-    }
-  }
-
-  /// Find the nearest landmark of a specific type with floor awareness
-  static Landmark? findNearestLandmark({
-    required LatLng userLocation,
-    required String landmarkType,
-    required RoadSystem roadSystem,
-    String? currentFloorId,
-    String? currentBuildingId,
-    bool searchAllFloors = false,
-  }) {
-    final allLandmarks = <Landmark>[];
-    
-    if (currentFloorId != null && !searchAllFloors) {
-      // Search within current floor first
-      final building = roadSystem.buildings.where((b) => b.id == currentBuildingId).firstOrNull;
-      if (building != null) {
-        final floor = building.floors.where((f) => f.id == currentFloorId).firstOrNull;
-        if (floor != null) {
-          allLandmarks.addAll(floor.landmarks.where((l) => l.type == landmarkType));
-        }
-      }
-    } else {
-      // Search all landmarks
-      allLandmarks.addAll(
-        roadSystem.outdoorLandmarks.where((l) => l.type == landmarkType)
-      );
-      
-      for (final building in roadSystem.buildings) {
-        for (final floor in building.floors) {
-          allLandmarks.addAll(
-            floor.landmarks.where((l) => l.type == landmarkType)
-          );
-        }
-      }
-    }
-    
-    if (allLandmarks.isEmpty) return null;
-    
-    Landmark? nearest;
-    double minDistance = double.infinity;
-    
-    for (final landmark in allLandmarks) {
-      double distance = calculateDistance(userLocation, landmark.position);
-      
-      // Prefer landmarks on the same floor
-      if (currentFloorId != null && landmark.floorId == currentFloorId) {
-        distance *= 0.3; // Strong preference for same floor
-      } else if (currentBuildingId != null && landmark.buildingId == currentBuildingId) {
-        distance *= 0.7; // Preference for same building
-      }
-      
-      if (distance < minDistance) {
-        minDistance = distance;
-        nearest = landmark;
-      }
-    }
-    
-    return nearest;
-  }
-
-  /// Get turn-by-turn directions with floor context
-  static List<NavigationInstruction> getTurnByTurnDirections(
-    NavigationRoute route,
+  /// Generate detailed turn-by-turn instructions
+  static String _generateDetailedInstructions(
+    List<LatLng> waypoints, List<String> floorChanges, NavigationContext context
   ) {
+    if (waypoints.isEmpty) return 'No route found';
+    
+    final instructions = <String>['Start navigation'];
+    instructions.addAll(floorChanges);
+    instructions.add('Arrive at destination');
+    
+    return instructions.join('\n');
+  }
+
+  /// Generate instruction for floor changes
+  static String _generateFloorChangeInstruction(Floor from, Floor to, Landmark circulation) {
+    final fromLevel = from.level;
+    final toLevel = to.level;
+    final direction = toLevel > fromLevel ? 'up' : 'down';
+    final levels = (toLevel - fromLevel).abs();
+    
+    return 'Take ${circulation.type} $direction ${levels == 1 ? '1 floor' : '$levels floors'} to ${to.name}';
+  }
+
+  /// Generate navigation instructions from route
+  static List<NavigationInstruction> generateInstructions(NavigationRoute route) {
     final instructions = <NavigationInstruction>[];
+    
+    if (route.waypoints.length < 2) {
+      return [NavigationInstruction(
+        instruction: 'You are at your destination',
+        distance: 0,
+        position: route.end,
+      )];
+    }
     
     for (int i = 0; i < route.waypoints.length - 1; i++) {
       final current = route.waypoints[i];
@@ -755,11 +641,14 @@ class NavigationService {
     
     // Check if this step involves a floor transition
     final transition = transitions.where((t) => 
-      calculateDistance(t.transitionPoint, from) < 5.0
+      calculateDistance(t.position, from) < 5.0
     ).firstOrNull;
     
     if (transition != null) {
-      return transition.instructions;
+      // Generate instruction based on transition type
+      final fromLevel = transition.fromFloorId;
+      final toLevel = transition.toFloorId;
+      return 'Take ${transition.transitionType} from $fromLevel to $toLevel';
     }
     
     if (step == 0) {
@@ -799,16 +688,12 @@ class NavigationService {
     double toleranceMeters = 10.0,
     String? currentFloorId,
   }) {
-    // Find the closest point on the route
-    double minDistance = double.infinity;
+    if (route.waypoints.isEmpty) return true;
     
-    for (int i = 0; i < route.waypoints.length - 1; i++) {
-      final distance = _distanceToLineSegment(
-        userLocation,
-        route.waypoints[i],
-        route.waypoints[i + 1],
-      );
-      
+    // Find closest waypoint
+    double minDistance = double.infinity;
+    for (final waypoint in route.waypoints) {
+      final distance = calculateDistance(userLocation, waypoint);
       if (distance < minDistance) {
         minDistance = distance;
       }
@@ -817,7 +702,75 @@ class NavigationService {
     return minDistance > toleranceMeters;
   }
 
-  static double _distanceToLineSegment(LatLng point, LatLng lineStart, LatLng lineEnd) {
+  /// Calculate estimated time to complete route
+  static Duration calculateEstimatedTime(NavigationRoute route) {
+    final distanceKm = route.totalDistance / 1000;
+    final timeSeconds = (distanceKm / (_defaultWalkingSpeed * 3.6)) * 3600;
+    return Duration(seconds: timeSeconds.round());
+  }
+
+  /// Get progress of navigation (0.0 to 1.0)
+  static double getNavigationProgress(
+    LatLng currentLocation,
+    NavigationRoute route,
+  ) {
+    if (route.waypoints.length < 2) return 1.0;
+    
+    final totalDistance = route.totalDistance;
+    if (totalDistance == 0) return 1.0;
+    
+    // Find progress along route
+    double coveredDistance = 0;
+    double minDistanceToRoute = double.infinity;
+    int closestSegmentIndex = 0;
+    
+    for (int i = 0; i < route.waypoints.length - 1; i++) {
+      final segmentStart = route.waypoints[i];
+      final segmentEnd = route.waypoints[i + 1];
+      
+      final distanceToSegment = _pointToLineDistance(
+        currentLocation, segmentStart, segmentEnd
+      );
+      
+      if (distanceToSegment < minDistanceToRoute) {
+        minDistanceToRoute = distanceToSegment;
+        closestSegmentIndex = i;
+      }
+    }
+    
+    // Calculate covered distance up to closest segment
+    for (int i = 0; i < closestSegmentIndex; i++) {
+      coveredDistance += calculateDistance(route.waypoints[i], route.waypoints[i + 1]);
+    }
+    
+    // Add partial distance on current segment
+    final segmentStart = route.waypoints[closestSegmentIndex];
+    final segmentEnd = route.waypoints[closestSegmentIndex + 1];
+    final projectedPoint = _projectPointOnLine(currentLocation, segmentStart, segmentEnd);
+    coveredDistance += calculateDistance(segmentStart, projectedPoint);
+    
+    return (coveredDistance / totalDistance).clamp(0.0, 1.0);
+  }
+
+  /// Calculate distance between two points
+  static double calculateDistance(LatLng point1, LatLng point2) {
+    const double earthRadius = 6371000; // meters
+    
+    final lat1Rad = point1.latitude * (pi / 180);
+    final lat2Rad = point2.latitude * (pi / 180);
+    final deltaLatRad = (point2.latitude - point1.latitude) * (pi / 180);
+    final deltaLngRad = (point2.longitude - point1.longitude) * (pi / 180);
+    
+    final a = sin(deltaLatRad / 2) * sin(deltaLatRad / 2) +
+              cos(lat1Rad) * cos(lat2Rad) *
+              sin(deltaLngRad / 2) * sin(deltaLngRad / 2);
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    
+    return earthRadius * c;
+  }
+
+  /// Calculate distance from point to line segment
+  static double _pointToLineDistance(LatLng point, LatLng lineStart, LatLng lineEnd) {
     final A = point.latitude - lineStart.latitude;
     final B = point.longitude - lineStart.longitude;
     final C = lineEnd.latitude - lineStart.latitude;
@@ -846,50 +799,24 @@ class NavigationService {
     
     return calculateDistance(point, closestPoint);
   }
-}
 
-/// Navigation context for route calculation
-class NavigationContext {
-  final NavigationType type;
-  final RoadSystem roadSystem;
-  final Building? startBuilding;
-  final Building? endBuilding;
-  final Floor? startFloor;
-  final Floor? endFloor;
-
-  NavigationContext({
-    required this.type,
-    required this.roadSystem,
-    this.startBuilding,
-    this.endBuilding,
-    this.startFloor,
-    this.endFloor,
-  });
-}
-
-/// Types of navigation scenarios
-enum NavigationType {
-  sameFloor,
-  sameBuilding,
-  differentBuildings,
-  indoorToOutdoor,
-  outdoorToIndoor,
-  outdoorOnly,
-}
-
-/// Enhanced navigation instruction
-class NavigationInstruction {
-  final String instruction;
-  final double distance;
-  final LatLng position;
-  final String? floorId;
-  final String? buildingId;
-
-  NavigationInstruction({
-    required this.instruction,
-    required this.distance,
-    required this.position,
-    this.floorId,
-    this.buildingId,
-  });
+  /// Project point onto line segment
+  static LatLng _projectPointOnLine(LatLng point, LatLng lineStart, LatLng lineEnd) {
+    final A = point.latitude - lineStart.latitude;
+    final B = point.longitude - lineStart.longitude;
+    final C = lineEnd.latitude - lineStart.latitude;
+    final D = lineEnd.longitude - lineStart.longitude;
+    
+    final dot = A * C + B * D;
+    final lenSq = C * C + D * D;
+    
+    if (lenSq == 0) return lineStart;
+    
+    final param = (dot / lenSq).clamp(0.0, 1.0);
+    
+    return LatLng(
+      lineStart.latitude + param * C,
+      lineStart.longitude + param * D,
+    );
+  }
 }

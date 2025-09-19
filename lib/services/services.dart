@@ -40,21 +40,21 @@ class DataStorageService {
       
       for (final id in systemIds) {
         try {
-          final systemJson = prefs.getString('road_system_$id');
-          if (systemJson != null) {
-            final systemData = json.decode(systemJson);
-            final roadSystem = RoadSystem.fromJson(systemData);
+          final systemData = prefs.getString('road_system_$id');
+          if (systemData != null) {
+            final systemJson = json.decode(systemData);
+            final roadSystem = RoadSystem.fromJson(systemJson);
             roadSystems.add(roadSystem);
           }
         } catch (e) {
           debugPrint('Error loading road system $id: $e');
-          // Remove corrupted system
+          // Remove corrupted system ID
           systemIds.remove(id);
           await prefs.remove('road_system_$id');
         }
       }
       
-      // Update clean system IDs
+      // Update cleaned system IDs
       await prefs.setStringList('road_system_ids', systemIds);
       
       debugPrint('Loaded ${roadSystems.length} road systems');
@@ -69,11 +69,11 @@ class DataStorageService {
   Future<RoadSystem?> loadRoadSystemById(String id) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final systemJson = prefs.getString('road_system_$id');
+      final systemData = prefs.getString('road_system_$id');
       
-      if (systemJson != null) {
-        final systemData = json.decode(systemJson);
-        return RoadSystem.fromJson(systemData);
+      if (systemData != null) {
+        final systemJson = json.decode(systemData);
+        return RoadSystem.fromJson(systemJson);
       }
       
       return null;
@@ -89,7 +89,7 @@ class DataStorageService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('road_system_$id');
       
-      // Update system IDs list
+      // Remove from system IDs list
       final systemIds = prefs.getStringList('road_system_ids') ?? [];
       systemIds.remove(id);
       await prefs.setStringList('road_system_ids', systemIds);
@@ -230,47 +230,47 @@ class DataStorageService {
       });
     }
     
-    // Add buildings and their contents
-    for (final building in roadSystem.buildings) {
-      // Building boundary
-      if (building.boundaryPoints.isNotEmpty) {
-        features.add({
-          'type': 'Feature',
-          'geometry': {
-            'type': 'Polygon',
-            'coordinates': [
-              building.boundaryPoints.map((point) => [point.longitude, point.latitude]).toList()
-            ],
-          },
-          'properties': {
-            'type': 'building',
-            'name': building.name,
-            'id': building.id,
-            'floors': building.floors.length,
-            'context': 'building',
-            ...building.properties,
-          }
-        });
-      }
-      
-      // Building center point
+    // Add outdoor intersections
+    for (final intersection in roadSystem.outdoorIntersections) {
       features.add({
         'type': 'Feature',
         'geometry': {
           'type': 'Point',
-          'coordinates': [building.centerPosition.longitude, building.centerPosition.latitude],
+          'coordinates': [intersection.position.longitude, intersection.position.latitude],
         },
         'properties': {
-          'type': 'building_center',
+          'type': 'intersection',
+          'name': intersection.name,
+          'id': intersection.id,
+          'connectedRoads': intersection.connectedRoadIds,
+          'context': 'outdoor',
+          ...intersection.properties,
+        }
+      });
+    }
+    
+    // Add buildings and their contents
+    for (final building in roadSystem.buildings) {
+      // Building polygon
+      features.add({
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Polygon',
+          'coordinates': [building.boundaryPoints.map((point) => [point.longitude, point.latitude]).toList()],
+        },
+        'properties': {
+          'type': 'building',
           'name': building.name,
           'id': building.id,
-          'floors': building.floors.length,
+          'centerPosition': [building.centerPosition.longitude, building.centerPosition.latitude],
+          'floorCount': building.floors.length,
+          'defaultFloorLevel': building.defaultFloorLevel,
           'context': 'building',
           ...building.properties,
         }
       });
       
-      // Add floor contents
+      // Floor contents
       for (final floor in building.floors) {
         // Indoor roads
         for (final road in floor.roads) {
@@ -344,13 +344,14 @@ class DataStorageService {
         'zoom': roadSystem.zoom,
         'exportedAt': DateTime.now().toIso8601String(),
         'totalBuildings': roadSystem.buildings.length,
-        'totalFloors': roadSystem.buildings.fold(0, (sum, b) => sum + b.floors.length),
+        // FIX: Added explicit type annotation and null safety
+        'totalFloors': roadSystem.buildings.fold<int>(0, (sum, b) => sum + (b.floors.length)),
         'totalRoads': roadSystem.outdoorRoads.length + 
-                     roadSystem.buildings.fold(0, (sum, b) => 
-                       sum + b.floors.fold(0, (floorSum, f) => floorSum + f.roads.length)),
+                     roadSystem.buildings.fold<int>(0, (sum, b) => 
+                       sum + b.floors.fold<int>(0, (floorSum, f) => floorSum + (f.roads.length))),
         'totalLandmarks': roadSystem.outdoorLandmarks.length + 
-                          roadSystem.buildings.fold(0, (sum, b) => 
-                            sum + b.floors.fold(0, (floorSum, f) => floorSum + f.landmarks.length)),
+                          roadSystem.buildings.fold<int>(0, (sum, b) => 
+                            sum + b.floors.fold<int>(0, (floorSum, f) => floorSum + (f.landmarks.length))),
       }
     };
   }
@@ -439,13 +440,14 @@ class DataStorageService {
             final roadSystem = RoadSystem.fromJson(systemData);
             
             totalBuildings += roadSystem.buildings.length;
-            totalFloors += roadSystem.buildings.fold(0, (sum, b) => sum + b.floors.length);
+            // FIX: Added explicit type annotation and null safety
+            totalFloors += roadSystem.buildings.fold<int>(0, (sum, b) => sum + (b.floors.length));
             totalRoads += roadSystem.outdoorRoads.length + 
-                         roadSystem.buildings.fold(0, (sum, b) => 
-                           sum + b.floors.fold(0, (floorSum, f) => floorSum + f.roads.length));
+                         roadSystem.buildings.fold<int>(0, (sum, b) => 
+                           sum + b.floors.fold<int>(0, (floorSum, f) => floorSum + (f.roads.length)));
             totalLandmarks += roadSystem.outdoorLandmarks.length + 
-                             roadSystem.buildings.fold(0, (sum, b) => 
-                               sum + b.floors.fold(0, (floorSum, f) => floorSum + f.landmarks.length));
+                             roadSystem.buildings.fold<int>(0, (sum, b) => 
+                               sum + b.floors.fold<int>(0, (floorSum, f) => floorSum + (f.landmarks.length)));
           } catch (e) {
             debugPrint('Error parsing system for stats: $e');
           }

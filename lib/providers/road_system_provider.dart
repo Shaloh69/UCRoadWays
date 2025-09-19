@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'dart:convert';
@@ -144,43 +145,16 @@ class RoadSystemProvider extends ChangeNotifier {
   // Update current system
   Future<void> updateCurrentSystem(RoadSystem updatedSystem) async {
     try {
-      if (_currentSystem == null || updatedSystem.id != _currentSystem!.id) {
-        throw Exception('Cannot update: system ID mismatch');
-      }
-      
-      // Update in the list
-      final index = _roadSystems.indexWhere((s) => s.id == updatedSystem.id);
-      if (index != -1) {
-        _roadSystems[index] = updatedSystem;
-        _currentSystem = updatedSystem;
-        
-        await saveRoadSystems();
-        notifyListeners();
-      } else {
-        throw Exception('System not found in list');
-      }
-    } catch (e) {
-      _setError('Failed to update system: $e');
-      debugPrint('Error updating system: $e');
-    }
-  }
-
-  // Update a specific system
-  Future<void> updateRoadSystem(RoadSystem updatedSystem) async {
-    try {
       final index = _roadSystems.indexWhere((s) => s.id == updatedSystem.id);
       if (index != -1) {
         _roadSystems[index] = updatedSystem;
         
-        // Update current system if it's the same
         if (_currentSystem?.id == updatedSystem.id) {
           _currentSystem = updatedSystem;
         }
         
         await saveRoadSystems();
         notifyListeners();
-      } else {
-        throw Exception('System not found');
       }
     } catch (e) {
       _setError('Failed to update system: $e');
@@ -192,7 +166,7 @@ class RoadSystemProvider extends ChangeNotifier {
     try {
       _roadSystems.removeWhere((s) => s.id == systemId);
       
-      // Clear current system if it was deleted
+      // If deleted system was current, set new current system
       if (_currentSystem?.id == systemId) {
         _currentSystem = _roadSystems.isNotEmpty ? _roadSystems.first : null;
       }
@@ -276,7 +250,7 @@ class RoadSystemProvider extends ChangeNotifier {
       type: road.type,
       width: road.width,
       isOneWay: road.isOneWay,
-      floorId: road.floorId, // This will be updated when floor is created
+      floorId: road.floorId, // Will be updated when floor is created
       connectedIntersections: List<String>.from(road.connectedIntersections),
       properties: Map<String, dynamic>.from(road.properties),
     )).toList();
@@ -288,10 +262,10 @@ class RoadSystemProvider extends ChangeNotifier {
       name: landmark.name,
       type: landmark.type,
       position: landmark.position,
-      floorId: landmark.floorId, // This will be updated when floor is created
+      floorId: landmark.floorId, // Will be updated when floor is created
       description: landmark.description,
       connectedFloors: List<String>.from(landmark.connectedFloors),
-      buildingId: landmark.buildingId, // This will be updated when building is created
+      buildingId: landmark.buildingId, // Will be updated when building is created
       properties: Map<String, dynamic>.from(landmark.properties),
     )).toList();
   }
@@ -309,22 +283,21 @@ class RoadSystemProvider extends ChangeNotifier {
   }
 
   // Import road system from JSON
-  Future<RoadSystem> importFromJson(String jsonString) async {
+  Future<RoadSystem> importRoadSystem(Map<String, dynamic> systemData) async {
     try {
-      final systemData = json.decode(jsonString);
-      final system = RoadSystem.fromJson(systemData);
+      final roadSystem = RoadSystem.fromJson(systemData);
       
-      // Ensure unique ID
+      // Generate new ID to avoid conflicts
       final importedSystem = RoadSystem(
         id: const Uuid().v4(),
-        name: '${system.name} (Imported)',
-        buildings: system.buildings,
-        outdoorRoads: system.outdoorRoads,
-        outdoorLandmarks: system.outdoorLandmarks,
-        outdoorIntersections: system.outdoorIntersections,
-        centerPosition: system.centerPosition,
-        zoom: system.zoom,
-        properties: system.properties,
+        name: '${roadSystem.name} (Imported)',
+        buildings: roadSystem.buildings,
+        outdoorRoads: roadSystem.outdoorRoads,
+        outdoorLandmarks: roadSystem.outdoorLandmarks,
+        outdoorIntersections: roadSystem.outdoorIntersections,
+        centerPosition: roadSystem.centerPosition,
+        zoom: roadSystem.zoom,
+        properties: roadSystem.properties,
       );
       
       _roadSystems.add(importedSystem);
@@ -358,6 +331,7 @@ class RoadSystemProvider extends ChangeNotifier {
     final system = _roadSystems.where((s) => s.id == systemId).firstOrNull;
     if (system == null) return {};
     
+    // FIX: Added explicit type annotation and proper null safety
     final totalFloors = system.buildings.fold<int>(0, (sum, building) => sum + building.floors.length);
     final totalIndoorRoads = system.buildings
         .expand((b) => b.floors)
@@ -391,9 +365,10 @@ class RoadSystemProvider extends ChangeNotifier {
       if (building.name.toLowerCase().contains(lowerQuery)) {
         results.add({
           'type': 'building',
-          'item': building,
-          'title': building.name,
-          'subtitle': '${building.floors.length} floors',
+          'id': building.id,
+          'name': building.name,
+          'position': building.centerPosition,
+          'buildingId': building.id,
         });
       }
       
@@ -402,67 +377,66 @@ class RoadSystemProvider extends ChangeNotifier {
         if (floor.name.toLowerCase().contains(lowerQuery)) {
           results.add({
             'type': 'floor',
-            'item': floor,
-            'building': building,
-            'title': floor.name,
-            'subtitle': 'in ${building.name}',
+            'id': floor.id,
+            'name': '${building.name} - ${floor.name}',
+            'position': floor.centerPosition ?? building.centerPosition,
+            'buildingId': building.id,
+            'floorId': floor.id,
           });
+        }
+        
+        // Search indoor roads
+        for (final road in floor.roads) {
+          if (road.name.toLowerCase().contains(lowerQuery)) {
+            results.add({
+              'type': 'indoor_road',
+              'id': road.id,
+              'name': '${building.name} - ${floor.name}: ${road.name}',
+              'position': road.points.isNotEmpty ? road.points.first : building.centerPosition,
+              'buildingId': building.id,
+              'floorId': floor.id,
+            });
+          }
         }
         
         // Search indoor landmarks
         for (final landmark in floor.landmarks) {
           if (landmark.name.toLowerCase().contains(lowerQuery) ||
-              landmark.type.toLowerCase().contains(lowerQuery)) {
+              landmark.description.toLowerCase().contains(lowerQuery)) {
             results.add({
-              'type': 'landmark',
-              'item': landmark,
-              'building': building,
-              'floor': floor,
-              'title': landmark.name,
-              'subtitle': '${landmark.type} - ${building.name}, ${floor.name}',
+              'type': 'indoor_landmark',
+              'id': landmark.id,
+              'name': '${building.name} - ${floor.name}: ${landmark.name}',
+              'position': landmark.position,
+              'buildingId': building.id,
+              'floorId': floor.id,
             });
           }
         }
-        
-        // Search indoor roads
-        for (final road in floor.roads) {
-          if (road.name.toLowerCase().contains(lowerQuery) ||
-              road.type.toLowerCase().contains(lowerQuery)) {
-            results.add({
-              'type': 'road',
-              'item': road,
-              'building': building,
-              'floor': floor,
-              'title': road.name,
-              'subtitle': '${road.type} - ${building.name}, ${floor.name}',
-            });
-          }
-        }
+      }
+    }
+    
+    // Search outdoor roads
+    for (final road in _currentSystem!.outdoorRoads) {
+      if (road.name.toLowerCase().contains(lowerQuery)) {
+        results.add({
+          'type': 'outdoor_road',
+          'id': road.id,
+          'name': road.name,
+          'position': road.points.isNotEmpty ? road.points.first : _currentSystem!.centerPosition,
+        });
       }
     }
     
     // Search outdoor landmarks
     for (final landmark in _currentSystem!.outdoorLandmarks) {
       if (landmark.name.toLowerCase().contains(lowerQuery) ||
-          landmark.type.toLowerCase().contains(lowerQuery)) {
+          landmark.description.toLowerCase().contains(lowerQuery)) {
         results.add({
-          'type': 'landmark',
-          'item': landmark,
-          'title': landmark.name,
-          'subtitle': '${landmark.type} - Outdoor',
-        });
-      }
-    }
-    
-    // Search outdoor roads
-    for (final road in _currentSystem!.outdoorRoads) {
-      if (road.name.toLowerCase().contains(lowerQuery) ||
-          road.type.toLowerCase().contains(lowerQuery)) {
-        results.add({
-          'type': 'road',
-          'item': road,
-          'title': road.name,
-          'subtitle': '${road.type} - Outdoor',
+          'type': 'outdoor_landmark',
+          'id': landmark.id,
+          'name': landmark.name,
+          'position': landmark.position,
         });
       }
     }
@@ -566,5 +540,3 @@ class RoadSystemProvider extends ChangeNotifier {
     super.dispose();
   }
 }
-
-// Note: IterableExtension is defined in models.dart

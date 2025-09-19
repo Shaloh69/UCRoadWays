@@ -76,7 +76,8 @@ class UCRoadWaysApp extends StatelessWidget {
             ),
             iconTheme: IconThemeData(color: Colors.black),
           ),
-          cardTheme: CardTheme(
+          // Use CardThemeData (theme data) here — not the CardTheme widget
+          cardTheme: CardThemeData(
             elevation: 2,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
@@ -113,7 +114,7 @@ class UCRoadWaysApp extends StatelessWidget {
             ),
           ),
         ),
-        
+
         // Routes
         initialRoute: '/',
         routes: {
@@ -124,22 +125,20 @@ class UCRoadWaysApp extends StatelessWidget {
           '/floor-management': (context) => const FloorManagementScreen(),
           '/network-analyzer': (context) => const RoadNetworkAnalyzerScreen(),
         },
-        
+
         // Handle unknown routes
         onUnknownRoute: (settings) {
           return MaterialPageRoute(
             builder: (context) => const NotFoundScreen(),
           );
         },
-        
-        // Global error handler
+
+        // Global builder — clamp the text scale factor between 0.8 and 1.2
         builder: (context, child) {
+          final mq = MediaQuery.of(context);
+          final clampedTextScale = mq.textScaleFactor.clamp(0.8, 1.2);
           return MediaQuery(
-            data: MediaQuery.of(context).copyWith(
-              textScaler: TextScaler.linear(
-                MediaQuery.of(context).textScaler.scale(1.0).clamp(0.8, 1.2),
-              ),
-            ),
+            data: mq.copyWith(textScaleFactor: clampedTextScale),
             child: child!,
           );
         },

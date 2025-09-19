@@ -382,7 +382,7 @@ class _RoadSystemManagerScreenState extends State<RoadSystemManagerScreen> {
                 if (lat != null && lng != null) {
                   final center = LatLng(lat, lng);
                   Provider.of<RoadSystemProvider>(context, listen: false)
-                      .createNewRoadSystem(nameController.text, center);
+                      .createRoadSystem (nameController.text, center);
                   Navigator.pop(context);
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(

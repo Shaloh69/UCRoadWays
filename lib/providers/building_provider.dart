@@ -145,6 +145,7 @@ class BuildingProvider extends ChangeNotifier {
       targetFloor ??= building.floors.where((f) => f.level == 0).firstOrNull;
       targetFloor ??= building.floors.first;
       
+      // ignore: unnecessary_null_comparison
       if (targetFloor != null) {
         _selectedFloorId = targetFloor.id;
         notifyListeners();
