@@ -79,7 +79,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Future<void> _saveAppState() async {
     try {
       final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
-      // FIXED: Auto-save current work - use correct method name
       await roadSystemProvider.saveRoadSystems();
       debugPrint('App state saved');
     } catch (e) {
@@ -456,19 +455,19 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 mapController: _mapController,
               ),
               
-              // FIXED: Floating controls - removed invalid parameters
+              // FIXED: Floating controls with proper integration
               FloatingControls(
                 mapController: _mapController,
                 mapWidgetKey: _mapWidgetKey,
               ),
               
-              // FIXED: Floor switcher (when in indoor mode) - only mapController parameter
+              // Floor switcher (when in indoor mode)
               if (buildingProvider.isIndoorMode && buildingProvider.getSelectedBuilding(roadSystemProvider.currentSystem) != null)
                 FloorSwitcher(
                   mapController: _mapController,
                 ),
               
-              // FIXED: Bottom panel - use onToggleExpanded
+              // Bottom panel
               Positioned(
                 left: 0,
                 right: 0,

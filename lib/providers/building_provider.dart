@@ -643,6 +643,20 @@ class BuildingProvider extends ChangeNotifier {
     return true;
   }
 
+  String getCurrentContextDescription(RoadSystem? roadSystem) {
+  if (roadSystem == null) return 'No road system selected';
+  if (!_isIndoorMode) return 'Outdoor navigation mode';
+  
+  final building = getSelectedBuilding(roadSystem);
+  if (building == null) return 'Indoor mode - No building selected';
+  
+  final floor = getSelectedFloor(roadSystem);
+  if (floor == null) return 'Building: ${building.name} - No floor selected';
+  
+  final floorName = getFloorDisplayName(floor);
+  return 'Building: ${building.name} - $floorName';
+}
+
   /// Get navigation context for current selection
   Map<String, dynamic>? getNavigationContext(RoadSystem? roadSystem) {
     final building = getSelectedBuilding(roadSystem);

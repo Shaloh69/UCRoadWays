@@ -138,24 +138,27 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
   }
 
   void _setupMapEventListeners() {
-    // Listen for map move events to detect manual movement
+    // FIXED: Listen for map move events with correct API
     widget.mapController.mapEventStream.listen((event) {
       if (!mounted) return;
       
-      if (event is MapEventMove || event is MapEventMoveEnd) {
-        _currentCenter = event.center;
-        _currentZoom = event.zoom;
+      // FIXED: Handle different event types properly
+      if (event is MapEventMove) {
+        _currentCenter = event.camera.center;
+        _currentZoom = event.camera.zoom;
         
-        // If user manually moved the map, stop following location temporarily
+        // FIXED: Check for manual movement with correct source constants
         if (event.source == MapEventSource.onDrag ||
-            event.source == MapEventSource.doubleTapZoom ||
-            event.source == MapEventSource.scrollWheel) {
+            event.source == MapEventSource.doubleTap ||
+            event.source == MapEventSource.onMultiFinger) {
           _lastManualMove = DateTime.now();
           _followUserLocation = false;
         }
       }
       
       if (event is MapEventMoveEnd) {
+        _currentCenter = event.camera.center;
+        _currentZoom = event.camera.zoom;
         _isAnimating = false;
         setState(() {});
       }
@@ -231,6 +234,7 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
               selectedFloor,
               buildingProvider,
               offlineMapProvider,
+              locationProvider, // FIXED: Added missing parameter
             ),
             
             // Map controls overlay
@@ -255,6 +259,7 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
     Floor? selectedFloor,
     BuildingProvider buildingProvider,
     OfflineMapProvider offlineMapProvider,
+    LocationProvider locationProvider, // FIXED: Added missing parameter
   ) {
     return FlutterMap(
       mapController: widget.mapController,
@@ -304,23 +309,37 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
           },
         ),
         
-        // Building polygons
-        if (currentSystem != null) ..._buildBuildingPolygons(currentSystem, selectedBuilding, buildingProvider),
+        // FIXED: Building polygons wrapped in PolygonLayer
+        if (currentSystem != null) 
+          PolygonLayer(
+            polygons: _buildBuildingPolygons(currentSystem, selectedBuilding, buildingProvider),
+          ),
         
-        // Road polylines
-        if (currentSystem != null) ..._buildRoadPolylines(currentSystem, selectedFloor, buildingProvider),
+        // FIXED: Road polylines wrapped in PolylineLayer
+        if (currentSystem != null) 
+          PolylineLayer(
+            polylines: _buildRoadPolylines(currentSystem, selectedFloor, buildingProvider),
+          ),
         
         // Temporary road being recorded
-        if (_tempRoadPoints.isNotEmpty) ..._buildTempRoadPolylines(),
+        if (_tempRoadPoints.isNotEmpty) 
+          PolylineLayer(
+            polylines: _buildTempRoadPolylines(),
+          ),
         
         // Landmark markers
-        if (currentSystem != null) ..._buildLandmarkMarkers(currentSystem, selectedFloor, buildingProvider),
+        if (currentSystem != null) 
+          MarkerLayer(
+            markers: _buildLandmarkMarkers(currentSystem, selectedFloor, buildingProvider),
+          ),
         
         // Current location marker
-        if (currentLocation != null) _buildCurrentLocationMarker(currentLocation, locationProvider),
+        if (currentLocation != null) 
+          _buildCurrentLocationMarker(currentLocation, locationProvider),
         
         // Location history trail
-        if (locationProvider.locationHistory.isNotEmpty) _buildLocationTrail(locationProvider),
+        if (locationProvider.locationHistory.isNotEmpty) 
+          _buildLocationTrail(locationProvider),
       ],
     );
   }
@@ -532,6 +551,7 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
     return currentSystem?.buildings.isNotEmpty == true ? 17.0 : _defaultZoom;
   }
 
+  // FIXED: Return List<Polygon> instead of List<Widget>
   List<Polygon> _buildBuildingPolygons(RoadSystem system, Building? selectedBuilding, BuildingProvider buildingProvider) {
     return system.buildings.map((building) {
       final isSelected = building.id == selectedBuilding?.id;
@@ -699,7 +719,7 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
       case 'information':
         return Icons.info;
       case 'emergency_exit':
-        return Icons.emergency_exit;
+        return Icons.exit_to_app; // FIXED: Use valid icon
       case 'parking':
         return Icons.local_parking;
       default:
@@ -985,7 +1005,7 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
       type: buildingProvider.isIndoorMode ? 'corridor' : 'path',
       width: 3.0,
       isOneWay: false,
-      floorId: buildingProvider.selectedFloorId,
+      floorId: buildingProvider.selectedFloorId ?? '', // FIXED: Handle nullable string
       connectedIntersections: [],
       properties: {
         'created': DateTime.now().toIso8601String(),
@@ -993,10 +1013,20 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
       },
     );
     
-    if (buildingProvider.isIndoorMode) {
-      roadSystemProvider.addIndoorRoad(road, buildingProvider.selectedFloorId!);
-    } else {
-      roadSystemProvider.addOutdoorRoad(road);
+    // FIXED: Add road to current system directly
+    if (roadSystemProvider.currentSystem != null) {
+      if (buildingProvider.isIndoorMode && buildingProvider.selectedFloorId != null) {
+        // Add to indoor floor - modify the current system's building floor
+        roadSystemProvider.currentSystem!.buildings
+          .where((b) => b.floors.any((f) => f.id == buildingProvider.selectedFloorId))
+          .first.floors
+          .where((f) => f.id == buildingProvider.selectedFloorId)
+          .first.roads.add(road);
+      } else {
+        // Add to outdoor roads
+        roadSystemProvider.currentSystem!.outdoorRoads.add(road);
+      }
+      roadSystemProvider.refresh(); // Notify listeners
     }
     
     _cancelRecordingRoad();
@@ -1116,16 +1146,30 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
       name: name,
       type: type,
       position: point,
-      floorId: buildingProvider.selectedFloorId,
+      floorId: buildingProvider.selectedFloorId ?? '', // FIXED: Handle nullable string
       description: description,
       connectedFloors: [],
-      buildingId: buildingProvider.selectedBuildingId,
+      buildingId: buildingProvider.selectedBuildingId ?? '', // FIXED: Handle nullable string
       properties: {
         'created': DateTime.now().toIso8601String(),
       },
     );
     
-    roadSystemProvider.addLandmark(landmark, buildingProvider.selectedFloorId);
+    // FIXED: Add landmark to current system directly
+    if (roadSystemProvider.currentSystem != null) {
+      if (buildingProvider.isIndoorMode && buildingProvider.selectedFloorId != null) {
+        // Add to indoor floor
+        roadSystemProvider.currentSystem!.buildings
+          .where((b) => b.floors.any((f) => f.id == buildingProvider.selectedFloorId))
+          .first.floors
+          .where((f) => f.id == buildingProvider.selectedFloorId)
+          .first.landmarks.add(landmark);
+      } else {
+        // Add to outdoor landmarks
+        roadSystemProvider.currentSystem!.outdoorLandmarks.add(landmark);
+      }
+      roadSystemProvider.refresh(); // Notify listeners
+    }
     
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Landmark "$name" added successfully')),
@@ -1200,14 +1244,18 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
       },
     );
     
-    roadSystemProvider.addBuilding(building);
+    // FIXED: Add building to current system directly
+    if (roadSystemProvider.currentSystem != null) {
+      roadSystemProvider.currentSystem!.buildings.add(building);
+      roadSystemProvider.refresh(); // Notify listeners
+    }
     
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Building "$name" added successfully')),
     );
   }
 
-  // Public methods for external control
+  // FIXED: Public methods for external control (matching what FloatingControls expects)
   void startRecordingRoad() {
     final locationProvider = Provider.of<LocationProvider>(context, listen: false);
     if (locationProvider.currentLatLng != null) {
@@ -1225,6 +1273,36 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
     }
   }
 
+  // FIXED: Added the missing methods that FloatingControls calls
+  void startAddingLandmark() {
+    setState(() {
+      _isAddingLandmark = true;
+      _isAddingBuilding = false;
+    });
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Tap on the map to add a landmark'),
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void startAddingBuilding() {
+    setState(() {
+      _isAddingBuilding = true;
+      _isAddingLandmark = false;
+    });
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Tap on the map to add a building'),
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
+
+  // Keep the existing toggle methods for backward compatibility
   void toggleAddingLandmark() {
     setState(() {
       _isAddingLandmark = !_isAddingLandmark;
@@ -1239,6 +1317,20 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
     });
   }
 
+  // Methods to stop adding modes
+  void stopAddingLandmark() {
+    setState(() {
+      _isAddingLandmark = false;
+    });
+  }
+
+  void stopAddingBuilding() {
+    setState(() {
+      _isAddingBuilding = false;
+    });
+  }
+
+  // Public getters for state
   bool get isRecordingRoad => _isRecordingRoad;
   bool get isAddingLandmark => _isAddingLandmark;
   bool get isAddingBuilding => _isAddingBuilding;

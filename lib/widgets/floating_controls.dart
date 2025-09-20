@@ -188,12 +188,13 @@ class _FloatingControlsState extends State<FloatingControls>
   }
 
   Widget _buildModeToggleButton(BuildingProvider buildingProvider) {
-    return FloatingActionButton(
+    return FloatingActionButton.small(
       heroTag: "mode_toggle",
       onPressed: () {
         buildingProvider.toggleMode();
       },
-      backgroundColor: buildingProvider.isIndoorMode ? Colors.purple : Colors.green,
+      backgroundColor: buildingProvider.isIndoorMode 
+          ? Colors.purple : Colors.green,
       child: Icon(
         buildingProvider.isIndoorMode ? Icons.business : Icons.landscape,
       ),
@@ -257,10 +258,8 @@ class _FloatingControlsState extends State<FloatingControls>
     return FloatingActionButton.small(
       heroTag: "center_location",
       onPressed: locationProvider.currentLatLng != null ? () {
-        widget.mapController.move(
-          locationProvider.currentLatLng!,
-          widget.mapController.camera.zoom,
-        );
+        // FIXED: Use the proper method from map widget
+        widget.mapWidgetKey.currentState?.centerOnCurrentLocation();
       } : null,
       backgroundColor: locationProvider.currentLatLng != null ? Colors.blue : Colors.grey,
       child: const Icon(Icons.my_location, size: 20),
@@ -283,6 +282,7 @@ class _FloatingControlsState extends State<FloatingControls>
     return FloatingActionButton.small(
       heroTag: "add_landmark",
       onPressed: () {
+        // FIXED: Use the proper method name that exists in map widget
         widget.mapWidgetKey.currentState?.startAddingLandmark();
         _toggleControls();
       },
@@ -295,6 +295,7 @@ class _FloatingControlsState extends State<FloatingControls>
     return FloatingActionButton.small(
       heroTag: "add_building",
       onPressed: () {
+        // FIXED: Use the proper method name that exists in map widget
         widget.mapWidgetKey.currentState?.startAddingBuilding();
         _toggleControls();
       },
@@ -307,7 +308,7 @@ class _FloatingControlsState extends State<FloatingControls>
     setState(() {
       _isRecording = true;
     });
-    widget.mapWidgetKey.currentState?.startRoadRecording();
+    widget.mapWidgetKey.currentState?.startRecordingRoad();
     _toggleControls();
   }
 
@@ -315,11 +316,11 @@ class _FloatingControlsState extends State<FloatingControls>
     setState(() {
       _isRecording = false;
     });
-    widget.mapWidgetKey.currentState?.stopRoadRecording();
+    widget.mapWidgetKey.currentState?.stopRecordingRoad();
   }
 
   void _pauseRecording() {
-    // Implement pause functionality if needed
+    // TODO: Implement pause functionality if needed
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Recording paused'),
@@ -339,27 +340,22 @@ class _FloatingControlsState extends State<FloatingControls>
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Download offline maps for the current area'),
+              const Text('Download offline maps for the current area:'),
               const SizedBox(height: 16),
-              Row(
-                children: [
-                  const Text('Radius: '),
-                  Expanded(
-                    child: Slider(
-                      value: radius,
-                      min: 0.5,
-                      max: 5.0,
-                      divisions: 9,
-                      label: '${radius.toStringAsFixed(1)} km',
-                      onChanged: (value) {
-                        setState(() {
-                          radius = value;
-                        });
-                      },
-                    ),
-                  ),
-                ],
+              Text('Radius: ${radius.toStringAsFixed(1)} km'),
+              Slider(
+                value: radius,
+                min: 0.5,
+                max: 5.0,
+                divisions: 9,
+                label: '${radius.toStringAsFixed(1)} km',
+                onChanged: (value) {
+                  setState(() {
+                    radius = value;
+                  });
+                },
               ),
+              const SizedBox(height: 8),
               Text(
                 'Estimated size: ${_getEstimatedSize(radius)}',
                 style: Theme.of(context).textTheme.bodySmall,
@@ -374,24 +370,22 @@ class _FloatingControlsState extends State<FloatingControls>
             ElevatedButton(
               onPressed: () async {
                 Navigator.of(context).pop();
-                _toggleControls();
-                
                 try {
-                  final regionName = 'Current_Area_${DateTime.now().millisecondsSinceEpoch}';
-                  await offlineMapProvider.downloadCurrentView(
-                    center: locationProvider.currentLatLng!,
-                    zoom: widget.mapController.camera.zoom,
-                    regionName: regionName,
-                    radiusKm: radius,
-                  );
-                  
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Downloaded $regionName successfully'),
-                        backgroundColor: Colors.green,
-                      ),
+                  final currentLocation = locationProvider.currentLatLng;
+                  if (currentLocation != null) {
+                    await offlineMapProvider.downloadArea(
+                      currentLocation,
+                      radius,
+                      'Current Area ${DateTime.now().millisecondsSinceEpoch}',
                     );
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Download started successfully'),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                    }
                   }
                 } catch (e) {
                   if (mounted) {
@@ -489,7 +483,19 @@ class _FloatingControlsState extends State<FloatingControls>
                 Navigator.of(context).pop();
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (context) => const RoadNetworkAnalyzerScreen(),
+                    builder: (context) => const RoadNetworkAnalyzeScreen(),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.offline_pin),
+              title: const Text('Offline Maps'),
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const OfflineMapScreen(),
                   ),
                 );
               },
@@ -498,14 +504,5 @@ class _FloatingControlsState extends State<FloatingControls>
         ),
       ),
     );
-  String _getEstimatedSize(double radius) {
-    // Rough estimation: 1km radius ≈ 2MB at zoom levels 10-18
-    final estimatedMB = (radius * radius * 2).round();
-    if (estimatedMB < 1) {
-      return '< 1 MB';
-    } else {
-      return '$estimatedMB MB';
-    }
   }
 }
-    }
