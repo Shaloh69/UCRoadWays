@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import '../providers/location_provider.dart';
-import '../providers/building_provider.dart';
+import '../providers/building_provider.dart' as bp;
 import '../providers/road_system_provider.dart';
 import '../providers/offline_map_provider.dart';
 import '../widgets/map_widget.dart';
@@ -66,7 +67,7 @@ class _FloatingControlsState extends State<FloatingControls>
 
   @override
   Widget build(BuildContext context) {
-    return Consumer4<LocationProvider, BuildingProvider, RoadSystemProvider, OfflineMapProvider>(
+    return Consumer4<LocationProvider, bp.BuildingProvider, RoadSystemProvider, OfflineMapProvider>(
       builder: (context, locationProvider, buildingProvider, roadSystemProvider, offlineMapProvider, child) {
         final currentSystem = roadSystemProvider.currentSystem;
         final hasSystem = currentSystem != null;
@@ -127,6 +128,21 @@ class _FloatingControlsState extends State<FloatingControls>
                               
                               const SizedBox(height: 8),
                               
+                              // Road System Manager
+                              _buildRoadSystemManagerButton(),
+                              
+                              const SizedBox(height: 8),
+                              
+                              // Building Manager
+                              _buildBuildingManagerButton(),
+                              
+                              const SizedBox(height: 8),
+                              
+                              // Road Network Analysis
+                              _buildNetworkAnalysisButton(),
+                              
+                              const SizedBox(height: 8),
+                              
                               // Center on location
                               _buildCenterLocationButton(locationProvider),
                               
@@ -138,13 +154,13 @@ class _FloatingControlsState extends State<FloatingControls>
                               
                               const SizedBox(height: 8),
                               
-                              // Add landmark button
+                              // Add landmark button (only in indoor mode)
                               if (hasSystem && buildingProvider.isIndoorMode)
                                 _buildAddLandmarkButton(),
                               
                               const SizedBox(height: 8),
                               
-                              // Add building button
+                              // Add building button (only in outdoor mode)
                               if (hasSystem && !buildingProvider.isIndoorMode)
                                 _buildAddBuildingButton(),
                             ],
@@ -187,11 +203,11 @@ class _FloatingControlsState extends State<FloatingControls>
     );
   }
 
-  Widget _buildModeToggleButton(BuildingProvider buildingProvider) {
+  Widget _buildModeToggleButton(bp.BuildingProvider buildingProvider) {
     return FloatingActionButton.small(
       heroTag: "mode_toggle",
       onPressed: () {
-        buildingProvider.toggleMode();
+        buildingProvider.toggleIndoorMode();
       },
       backgroundColor: buildingProvider.isIndoorMode 
           ? Colors.purple : Colors.green,
@@ -254,11 +270,74 @@ class _FloatingControlsState extends State<FloatingControls>
     );
   }
 
+  Widget _buildNavigationButton() {
+    return FloatingActionButton.small(
+      heroTag: "navigation",
+      onPressed: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => const NavigationScreen(),
+          ),
+        );
+        _toggleControls();
+      },
+      backgroundColor: Colors.teal,
+      child: const Icon(Icons.navigation, size: 20),
+    );
+  }
+
+  Widget _buildRoadSystemManagerButton() {
+    return FloatingActionButton.small(
+      heroTag: "road_system_manager",
+      onPressed: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => const RoadSystemManagerScreen(),
+          ),
+        );
+        _toggleControls();
+      },
+      backgroundColor: Colors.orange,
+      child: const Icon(Icons.account_tree, size: 20),
+    );
+  }
+
+  Widget _buildBuildingManagerButton() {
+    return FloatingActionButton.small(
+      heroTag: "building_manager",
+      onPressed: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => const BuildingManagerScreen(),
+          ),
+        );
+        _toggleControls();
+      },
+      backgroundColor: Colors.purple,
+      child: const Icon(Icons.business_center, size: 20),
+    );
+  }
+
+  Widget _buildNetworkAnalysisButton() {
+    return FloatingActionButton.small(
+      heroTag: "network_analysis",
+      onPressed: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => const RoadNetworkAnalyzeScreen(),
+          ),
+        );
+        _toggleControls();
+      },
+      backgroundColor: Colors.indigo,
+      child: const Icon(Icons.analytics, size: 20),
+    );
+  }
+
   Widget _buildCenterLocationButton(LocationProvider locationProvider) {
     return FloatingActionButton.small(
       heroTag: "center_location",
       onPressed: locationProvider.currentLatLng != null ? () {
-        // FIXED: Use the proper method from map widget
         widget.mapWidgetKey.currentState?.centerOnCurrentLocation();
       } : null,
       backgroundColor: locationProvider.currentLatLng != null ? Colors.blue : Colors.grey,
@@ -282,7 +361,6 @@ class _FloatingControlsState extends State<FloatingControls>
     return FloatingActionButton.small(
       heroTag: "add_landmark",
       onPressed: () {
-        // FIXED: Use the proper method name that exists in map widget
         widget.mapWidgetKey.currentState?.startAddingLandmark();
         _toggleControls();
       },
@@ -295,7 +373,6 @@ class _FloatingControlsState extends State<FloatingControls>
     return FloatingActionButton.small(
       heroTag: "add_building",
       onPressed: () {
-        // FIXED: Use the proper method name that exists in map widget
         widget.mapWidgetKey.currentState?.startAddingBuilding();
         _toggleControls();
       },
@@ -320,17 +397,28 @@ class _FloatingControlsState extends State<FloatingControls>
   }
 
   void _pauseRecording() {
-    // TODO: Implement pause functionality if needed
+    // Show confirmation that recording is paused
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Recording paused'),
+        content: Text('Recording paused - tap stop to finish'),
         duration: Duration(seconds: 2),
       ),
     );
   }
 
   void _showQuickDownloadDialog(OfflineMapProvider offlineMapProvider, LocationProvider locationProvider) {
+    if (locationProvider.currentLatLng == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Location not available for download'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     double radius = 1.0;
+    final TextEditingController nameController = TextEditingController();
     
     showDialog(
       context: context,
@@ -340,15 +428,20 @@ class _FloatingControlsState extends State<FloatingControls>
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Download offline maps for the current area:'),
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Region Name (optional)',
+                  hintText: 'Leave empty for auto-generated name',
+                ),
+              ),
               const SizedBox(height: 16),
-              Text('Radius: ${radius.toStringAsFixed(1)} km'),
+              Text('Download radius: ${radius.toStringAsFixed(1)} km'),
               Slider(
                 value: radius,
                 min: 0.5,
                 max: 5.0,
                 divisions: 9,
-                label: '${radius.toStringAsFixed(1)} km',
                 onChanged: (value) {
                   setState(() {
                     radius = value;
@@ -357,35 +450,47 @@ class _FloatingControlsState extends State<FloatingControls>
               ),
               const SizedBox(height: 8),
               Text(
-                'Estimated size: ${_getEstimatedSize(radius)}',
+                'Estimated size: ${offlineMapProvider.formatBytes(
+                  offlineMapProvider.estimateDownloadSize(
+                    LatLng(
+                      locationProvider.currentLatLng!.latitude + (radius / 111),
+                      locationProvider.currentLatLng!.longitude + (radius / 111),
+                    ),
+                    LatLng(
+                      locationProvider.currentLatLng!.latitude - (radius / 111),
+                      locationProvider.currentLatLng!.longitude - (radius / 111),
+                    ),
+                    12,
+                    17,
+                  )
+                )}',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: () => Navigator.pop(context),
               child: const Text('Cancel'),
             ),
             ElevatedButton(
               onPressed: () async {
-                Navigator.of(context).pop();
+                Navigator.pop(context);
                 try {
-                  final currentLocation = locationProvider.currentLatLng;
-                  if (currentLocation != null) {
-                    await offlineMapProvider.downloadArea(
-                      currentLocation,
-                      radius,
-                      'Current Area ${DateTime.now().millisecondsSinceEpoch}',
+                  await offlineMapProvider.downloadAroundLocation(
+                    locationProvider.currentLatLng!,
+                    radius,
+                    customName: nameController.text.trim().isNotEmpty 
+                        ? nameController.text.trim() 
+                        : null,
+                  );
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Download started'),
+                        backgroundColor: Colors.green,
+                      ),
                     );
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Download started successfully'),
-                          backgroundColor: Colors.green,
-                        ),
-                      );
-                    }
                   }
                 } catch (e) {
                   if (mounted) {
@@ -399,106 +504,6 @@ class _FloatingControlsState extends State<FloatingControls>
                 }
               },
               child: const Text('Download'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _getEstimatedSize(double radius) {
-    // Rough estimation: 1km radius ≈ 2MB at zoom levels 10-18
-    final estimatedMB = (radius * radius * 2).round();
-    if (estimatedMB < 1) {
-      return '< 1 MB';
-    } else {
-      return '$estimatedMB MB';
-    }
-  }
-
-  Widget _buildNavigationButton() {
-    return FloatingActionButton.small(
-      heroTag: "navigation_menu",
-      onPressed: () {
-        _showNavigationMenu();
-      },
-      backgroundColor: Colors.purple,
-      child: const Icon(Icons.apps, size: 20),
-    );
-  }
-
-  void _showNavigationMenu() {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Navigate to...',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              leading: const Icon(Icons.map),
-              title: const Text('Road Systems'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => const RoadSystemManagerScreen(),
-                  ),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.business),
-              title: const Text('Buildings'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => const BuildingManagerScreen(),
-                  ),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.navigation),
-              title: const Text('Navigation'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => const NavigationScreen(),
-                  ),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.analytics),
-              title: const Text('Network Analysis'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => const RoadNetworkAnalyzeScreen(),
-                  ),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.offline_pin),
-              title: const Text('Offline Maps'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => const OfflineMapScreen(),
-                  ),
-                );
-              },
             ),
           ],
         ),
