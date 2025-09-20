@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
@@ -461,7 +462,6 @@ class GeoJsonExportService {
   static Map<String, dynamic> _generateMetadata(RoadSystem roadSystem) {
     return {
       'name': roadSystem.name,
-      'description': roadSystem.description,
       'exported_at': DateTime.now().toIso8601String(),
       'export_version': '1.0',
       'coordinate_system': 'WGS84',
@@ -719,8 +719,8 @@ class GeoJsonExportService {
     final double deltaLatRad = (point2.latitude - point1.latitude) * 3.14159265359 / 180;
     final double deltaLngRad = (point2.longitude - point1.longitude) * 3.14159265359 / 180;
 
-    final double a = (deltaLatRad / 2).sin() * (deltaLatRad / 2).sin() +
-        lat1Rad.cos() * lat2Rad.cos() * (deltaLngRad / 2).sin() * (deltaLngRad / 2).sin();
+    final double a = math.sin(deltaLatRad / 2) * math.sin(deltaLatRad / 2) +
+        math.cos(lat1Rad) * math.cos(lat2Rad) * math.sin(deltaLngRad / 2) * math.sin(deltaLngRad / 2);
     final double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
 
     return earthRadius * c;

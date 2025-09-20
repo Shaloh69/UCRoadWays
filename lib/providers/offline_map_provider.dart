@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/offline_tile_service.dart';
 import 'dart:math' as math;
 import 'dart:async';
@@ -72,69 +73,57 @@ class OfflineMapProvider extends ChangeNotifier {
     if (_downloadQueue.isNotEmpty) return '${_downloadQueue.length} downloads queued';
     if (_lastDownloadTime != null) {
       final timeSince = DateTime.now().difference(_lastDownloadTime!);
-      if (timeSince.inMinutes < 60) {
-        return 'Last download: ${timeSince.inMinutes}m ago';
-      } else if (timeSince.inHours < 24) {
-        return 'Last download: ${timeSince.inHours}h ago';
+      if (timeSince.inDays > 0) {
+        return 'Last download: ${timeSince.inDays} days ago';
+      } else if (timeSince.inHours > 0) {
+        return 'Last download: ${timeSince.inHours} hours ago';
       } else {
-        return 'Last download: ${timeSince.inDays}d ago';
+        return 'Last download: ${timeSince.inMinutes} minutes ago';
       }
     }
-    return 'No recent downloads';
+    return 'No downloads yet';
   }
 
+  /// Initialize the provider
   Future<void> initialize() async {
     if (_isInitialized) return;
     
     try {
-      debugPrint('Initializing offline map provider...');
-      
-      // Initialize the offline service
-      await _offlineService.initialize();
-      
-      // Load preferences
       await _loadPreferences();
-      
-      // Load downloaded regions
       await loadDownloadedRegions();
-      
-      // Start auto-cleanup if enabled
-      if (_autoCleanupDays > 0) {
-        _scheduleAutoCleanup();
-      }
-      
       _isInitialized = true;
-      _initializationError = null;
-      
-      debugPrint('Offline map provider initialized successfully');
-      notifyListeners();
+      debugPrint('OfflineMapProvider initialized successfully');
     } catch (e) {
-      _initializationError = 'Failed to initialize offline maps: $e';
-      debugPrint(_initializationError);
+      _initializationError = e.toString();
+      debugPrint('Failed to initialize OfflineMapProvider: $e');
+    } finally {
       notifyListeners();
-      rethrow;
     }
   }
 
+  /// Load preferences from SharedPreferences
   Future<void> _loadPreferences() async {
     try {
-      // In a real implementation, load from SharedPreferences
-      // For now, use defaults
-      _preferOffline = true;
-      _autoDownload = false;
-      _maxCacheSize = 500 * 1024 * 1024;
-      _autoCleanupDays = 30;
+      final prefs = await SharedPreferences.getInstance();
+      _preferOffline = prefs.getBool('prefer_offline') ?? true;
+      _autoDownload = prefs.getBool('auto_download') ?? false;
+      _maxCacheSize = prefs.getInt('max_cache_size') ?? (500 * 1024 * 1024);
+      _autoCleanupDays = prefs.getInt('auto_cleanup_days') ?? 30;
       
-      debugPrint('Preferences loaded: preferOffline=$_preferOffline, maxCacheSize=${formatBytes(_maxCacheSize)}');
+      debugPrint('Loaded preferences: preferOffline=$_preferOffline, autoDownload=$_autoDownload');
     } catch (e) {
       debugPrint('Failed to load preferences: $e');
     }
   }
 
+  /// Save preferences to SharedPreferences
   Future<void> _savePreferences() async {
     try {
-      // In a real implementation, save to SharedPreferences
-      debugPrint('Preferences saved');
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('prefer_offline', _preferOffline);
+      await prefs.setBool('auto_download', _autoDownload);
+      await prefs.setInt('max_cache_size', _maxCacheSize);
+      await prefs.setInt('auto_cleanup_days', _autoCleanupDays);
     } catch (e) {
       debugPrint('Failed to save preferences: $e');
     }
@@ -204,6 +193,105 @@ class OfflineMapProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Download current map view
+  Future<void> downloadCurrentView({
+    required LatLng center,
+    required double zoom,
+    String? regionName,
+    double radiusKm = 2.0,
+    int minZoom = 10,
+    int maxZoom = 17,
+  }) async {
+    // Calculate bounds from center and radius
+    const double kmToLatDegrees = 1.0 / 110.574;
+    final double kmToLngDegrees = 1.0 / (111.320 * math.cos(center.latitude * math.pi / 180));
+    
+    final double latOffset = radiusKm * kmToLatDegrees;
+    final double lngOffset = radiusKm * kmToLngDegrees;
+    
+    final northEast = LatLng(
+      center.latitude + latOffset,
+      center.longitude + lngOffset,
+    );
+    
+    final southWest = LatLng(
+      center.latitude - latOffset,
+      center.longitude - lngOffset,
+    );
+    
+    final finalRegionName = regionName ?? 'Location_${DateTime.now().millisecondsSinceEpoch}';
+    
+    await downloadRegion(
+      northEast: northEast,
+      southWest: southWest,
+      regionName: finalRegionName,
+      minZoom: minZoom,
+      maxZoom: maxZoom,
+    );
+  }
+
+  /// Refresh/update existing region
+  Future<void> refreshRegion(String regionName) async {
+    final region = getRegion(regionName);
+    if (region == null) {
+      throw ArgumentError('Region $regionName not found');
+    }
+    
+    await downloadRegion(
+      northEast: region.northEast,
+      southWest: region.southWest,
+      regionName: regionName,
+      minZoom: region.minZoom,
+      maxZoom: region.maxZoom,
+    );
+  }
+
+  /// Export region data (for backup/sharing)
+  Map<String, dynamic> exportRegionInfo(String regionName) {
+    final region = getRegion(regionName);
+    if (region == null) {
+      throw ArgumentError('Region $regionName not found');
+    }
+    
+    return {
+      'name': region.name,
+      'northEast': {
+        'latitude': region.northEast.latitude,
+        'longitude': region.northEast.longitude,
+      },
+      'southWest': {
+        'latitude': region.southWest.latitude,
+        'longitude': region.southWest.longitude,
+      },
+      'minZoom': region.minZoom,
+      'maxZoom': region.maxZoom,
+      'tileCount': region.tileCount,
+      'sizeBytes': region.sizeBytes,
+      'downloadedAt': region.downloadedAt.toIso8601String(),
+    };
+  }
+
+  /// Import region info (for restoration)
+  Future<void> importAndDownloadRegion(Map<String, dynamic> regionInfo) async {
+    final northEast = LatLng(
+      regionInfo['northEast']['latitude'],
+      regionInfo['northEast']['longitude'],
+    );
+    
+    final southWest = LatLng(
+      regionInfo['southWest']['latitude'],
+      regionInfo['southWest']['longitude'],
+    );
+    
+    await downloadRegion(
+      northEast: northEast,
+      southWest: southWest,
+      regionName: regionInfo['name'],
+      minZoom: regionInfo['minZoom'],
+      maxZoom: regionInfo['maxZoom'],
+    );
+  }
+
   Future<bool> _confirmReplaceRegion(String regionName) async {
     // In a real implementation, show a confirmation dialog
     // For now, assume user confirms
@@ -224,7 +312,7 @@ class OfflineMapProvider extends ChangeNotifier {
     
     _isProcessingQueue = true;
     
-    while (_downloadQueue.isNotEmpty && !_downloadError?.isNotEmpty == true) {
+    while (_downloadQueue.isNotEmpty && !(_downloadError?.isNotEmpty ?? false)) {
       final request = _downloadQueue.removeAt(0);
       await _executeDownload(request);
     }
@@ -292,7 +380,7 @@ class OfflineMapProvider extends ChangeNotifier {
     int totalTiles = 0;
     
     for (int zoom = minZoom; zoom <= maxZoom; zoom++) {
-      final tilesPerSide = math.pow(2, zoom).toInt();
+      final tilesPerSide = math.pow(2, zoom).round();
       
       // Calculate tile boundaries
       final minX = _longitudeToTileX(southWest.longitude, zoom);
@@ -609,68 +697,6 @@ class OfflineMapProvider extends ChangeNotifier {
       regionName: regionName,
       minZoom: minZoom,
       maxZoom: maxZoom,
-    );
-  }
-
-  /// Refresh/update existing region
-  Future<void> refreshRegion(String regionName) async {
-    final region = getRegion(regionName);
-    if (region == null) {
-      throw ArgumentError('Region $regionName not found');
-    }
-    
-    await downloadRegion(
-      northEast: region.northEast,
-      southWest: region.southWest,
-      regionName: regionName,
-      minZoom: region.minZoom,
-      maxZoom: region.maxZoom,
-    );
-  }
-
-  /// Export region data (for backup/sharing)
-  Map<String, dynamic> exportRegionInfo(String regionName) {
-    final region = getRegion(regionName);
-    if (region == null) {
-      throw ArgumentError('Region $regionName not found');
-    }
-    
-    return {
-      'name': region.name,
-      'northEast': {
-        'latitude': region.northEast.latitude,
-        'longitude': region.northEast.longitude,
-      },
-      'southWest': {
-        'latitude': region.southWest.latitude,
-        'longitude': region.southWest.longitude,
-      },
-      'minZoom': region.minZoom,
-      'maxZoom': region.maxZoom,
-      'tileCount': region.tileCount,
-      'sizeBytes': region.sizeBytes,
-      'downloadedAt': region.downloadedAt.toIso8601String(),
-    };
-  }
-
-  /// Import region info (for restoration)
-  Future<void> importAndDownloadRegion(Map<String, dynamic> regionInfo) async {
-    final northEast = LatLng(
-      regionInfo['northEast']['latitude'],
-      regionInfo['northEast']['longitude'],
-    );
-    
-    final southWest = LatLng(
-      regionInfo['southWest']['latitude'],
-      regionInfo['southWest']['longitude'],
-    );
-    
-    await downloadRegion(
-      northEast: northEast,
-      southWest: southWest,
-      regionName: regionInfo['name'],
-      minZoom: regionInfo['minZoom'],
-      maxZoom: regionInfo['maxZoom'],
     );
   }
 

@@ -1,951 +1,420 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:uuid/uuid.dart';
-import '../providers/road_system_provider.dart';
-import '../providers/building_provider.dart';
-import '../providers/location_provider.dart';
+import 'dart:math' as math;
 import '../models/models.dart';
 
-class BuildingManagerScreen extends StatefulWidget {
-  const BuildingManagerScreen({super.key});
+class BuildingProvider extends ChangeNotifier {
+  String? _selectedBuildingId;
+  String? _selectedFloorId;
+  bool _isIndoorMode = false;
+  bool _showFloorPlan = false;
+  
+  // Cache for performance
+  final Map<String, Map<String, dynamic>> _accessibilityCache = {};
+  final Map<String, Map<String, dynamic>> _connectivityCache = {};
 
-  @override
-  State<BuildingManagerScreen> createState() => _BuildingManagerScreenState();
-}
+  // Getters
+  String? get selectedBuildingId => _selectedBuildingId;
+  String? get selectedFloorId => _selectedFloorId;
+  bool get isIndoorMode => _isIndoorMode;
+  bool get showFloorPlan => _showFloorPlan;
 
-class _BuildingManagerScreenState extends State<BuildingManagerScreen>
-    with SingleTickerProviderStateMixin {
-  late TabController _tabController;
-
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+  /// Reset all selections and clear indoor mode
+  void reset() {
+    _selectedBuildingId = null;
+    _selectedFloorId = null;
+    _isIndoorMode = false;
+    _showFloorPlan = false;
+    _accessibilityCache.clear();
+    _connectivityCache.clear();
+    notifyListeners();
   }
 
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Building Manager'),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(text: 'Buildings', icon: Icon(Icons.business)),
-            Tab(text: 'Floors', icon: Icon(Icons.layers)),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: () => _showAddBuildingDialog(),
-            tooltip: 'Add Building',
-          ),
-        ],
-      ),
-      body: Consumer2<RoadSystemProvider, BuildingProvider>(
-        builder: (context, roadSystemProvider, buildingProvider, child) {
-          final currentSystem = roadSystemProvider.currentSystem;
-          
-          if (currentSystem == null) {
-            return const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.warning, size: 64, color: Colors.orange),
-                  SizedBox(height: 16),
-                  Text(
-                    'No Road System Selected',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  Text('Please select a road system first'),
-                ],
-              ),
-            );
-          }
-
-          return TabBarView(
-            controller: _tabController,
-            children: [
-              _buildBuildingsTab(currentSystem, buildingProvider, roadSystemProvider),
-              _buildFloorsTab(currentSystem, buildingProvider, roadSystemProvider),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildBuildingsTab(
-    RoadSystem system,
-    BuildingProvider buildingProvider,
-    RoadSystemProvider roadSystemProvider,
-  ) {
-    if (system.buildings.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.business_outlined, size: 64, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            const Text(
-              'No Buildings',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey),
-            ),
-            const Text('Add buildings to organize your indoor spaces'),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: () => _showAddBuildingDialog(),
-              icon: const Icon(Icons.add),
-              label: const Text('Add Building'),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: system.buildings.length,
-      itemBuilder: (context, index) {
-        final building = system.buildings[index];
-        final isSelected = buildingProvider.selectedBuildingId == building.id;
-
-        return Card(
-          elevation: isSelected ? 4 : 1,
-          margin: const EdgeInsets.only(bottom: 16),
-          color: isSelected ? Colors.blue[50] : null,
-          child: Column(
-            children: [
-              ListTile(
-                leading: Icon(
-                  Icons.business,
-                  color: isSelected ? Colors.blue : Colors.grey[600],
-                  size: 32,
-                ),
-                title: Text(
-                  building.name,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: isSelected ? Colors.blue : null,
-                  ),
-                ),
-                subtitle: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('${building.floors.length} floors'),
-                    Text(
-                      'Lat: ${building.centerPosition.latitude.toStringAsFixed(6)}, '
-                      'Lng: ${building.centerPosition.longitude.toStringAsFixed(6)}',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                    ),
-                  ],
-                ),
-                trailing: PopupMenuButton<String>(
-                  onSelected: (action) => _handleBuildingAction(
-                    action,
-                    building,
-                    roadSystemProvider,
-                    buildingProvider,
-                  ),
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(
-                      value: 'select',
-                      child: ListTile(
-                        leading: Icon(Icons.my_location),
-                        title: Text('Select'),
-                      ),
-                    ),
-                    const PopupMenuItem(
-                      value: 'edit',
-                      child: ListTile(
-                        leading: Icon(Icons.edit),
-                        title: Text('Edit'),
-                      ),
-                    ),
-                    const PopupMenuItem(
-                      value: 'add_floor',
-                      child: ListTile(
-                        leading: Icon(Icons.add),
-                        title: Text('Add Floor'),
-                      ),
-                    ),
-                    const PopupMenuItem(
-                      value: 'manage_boundary',
-                      child: ListTile(
-                        leading: Icon(Icons.border_outer),
-                        title: Text('Set Boundary'),
-                      ),
-                    ),
-                    const PopupMenuItem(
-                      value: 'delete',
-                      child: ListTile(
-                        leading: Icon(Icons.delete, color: Colors.red),
-                        title: Text('Delete', style: TextStyle(color: Colors.red)),
-                      ),
-                    ),
-                  ],
-                ),
-                onTap: () => buildingProvider.selectBuilding(building.id),
-              ),
-              if (building.floors.isNotEmpty) ...[
-                const Divider(height: 1),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Floors:',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        children: building.sortedFloors.map((floor) {
-                          final isFloorSelected = buildingProvider.selectedFloorId == floor.id;
-                          return GestureDetector(
-                            onTap: () => buildingProvider.selectFloor(floor.id),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: isFloorSelected ? Colors.blue : Colors.grey[200],
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: isFloorSelected ? Colors.blue : Colors.grey[400]!,
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    _getFloorIcon(floor.level),
-                                    size: 12,
-                                    color: isFloorSelected ? Colors.white : Colors.grey[700],
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    buildingProvider.getFloorDisplayName(floor),
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: isFloorSelected ? Colors.white : Colors.grey[700],
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildFloorsTab(
-    RoadSystem system,
-    BuildingProvider buildingProvider,
-    RoadSystemProvider roadSystemProvider,
-  ) {
-    final allFloors = <Map<String, dynamic>>[];
-    
-    for (final building in system.buildings) {
-      for (final floor in building.floors) {
-        allFloors.add({
-          'floor': floor,
-          'building': building,
-        });
+  /// Get display name for a floor (handles basement levels and special naming)
+  String getFloorDisplayName(Floor floor) {
+    if (floor.level == 0) {
+      return 'Ground Floor';
+    } else if (floor.level < 0) {
+      final basementLevel = floor.level.abs();
+      if (basementLevel == 1) {
+        return 'Basement';
+      } else {
+        return 'B$basementLevel';
       }
-    }
-
-    allFloors.sort((a, b) {
-      final floorA = a['floor'] as Floor;
-      final floorB = a['floor'] as Floor;
-      final comparison = (a['building'] as Building).name.compareTo((b['building'] as Building).name);
-      if (comparison != 0) return comparison;
-      return floorB.level.compareTo(floorA.level);
-    });
-
-    if (allFloors.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.layers_outlined, size: 64, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            const Text(
-              'No Floors',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey),
-            ),
-            const Text('Add buildings and floors to organize your spaces'),
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: allFloors.length,
-      itemBuilder: (context, index) {
-        final item = allFloors[index];
-        final floor = item['floor'] as Floor;
-        final building = item['building'] as Building;
-        final isSelected = buildingProvider.selectedFloorId == floor.id;
-
-        return Card(
-          elevation: isSelected ? 4 : 1,
-          color: isSelected ? Colors.green[50] : null,
-          child: ListTile(
-            leading: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  _getFloorIcon(floor.level),
-                  color: isSelected ? Colors.green : Colors.grey[600],
-                ),
-                Text(
-                  '${floor.level > 0 ? '+' : ''}${floor.level}',
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: isSelected ? Colors.green : Colors.grey[600],
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            title: Text(
-              floor.name,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: isSelected ? Colors.green : null,
-              ),
-            ),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Building: ${building.name}'),
-                Text('${floor.roads.length} roads, ${floor.landmarks.length} landmarks'),
-                if (floor.verticalCirculation.isNotEmpty)
-                  Text(
-                    'Vertical access: ${floor.verticalCirculation.map((l) => l.type).join(', ')}',
-                    style: TextStyle(color: Colors.blue[700], fontSize: 12),
-                  ),
-              ],
-            ),
-            trailing: PopupMenuButton<String>(
-              onSelected: (action) => _handleFloorAction(
-                action,
-                floor,
-                building,
-                roadSystemProvider,
-                buildingProvider,
-              ),
-              itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: 'select',
-                  child: ListTile(
-                    leading: Icon(Icons.my_location),
-                    title: Text('Select'),
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'edit',
-                  child: ListTile(
-                    leading: Icon(Icons.edit),
-                    title: Text('Edit'),
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'add_landmark',
-                  child: ListTile(
-                    leading: Icon(Icons.place_outlined),
-                    title: Text('Add Landmark'),
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'delete',
-                  child: ListTile(
-                    leading: Icon(Icons.delete, color: Colors.red),
-                    title: Text('Delete', style: TextStyle(color: Colors.red)),
-                  ),
-                ),
-              ],
-            ),
-            onTap: () {
-              buildingProvider.selectBuilding(building.id);
-              buildingProvider.selectFloor(floor.id);
-            },
-          ),
-        );
-      },
-    );
-  }
-
-  void _showAddBuildingDialog() {
-    final nameController = TextEditingController();
-    final latController = TextEditingController();
-    final lngController = TextEditingController();
-    
-    // Pre-fill with current location if available
-    final locationProvider = Provider.of<LocationProvider>(context, listen: false);
-    if (locationProvider.currentLatLng != null) {
-      latController.text = locationProvider.currentLatLng!.latitude.toStringAsFixed(6);
-      lngController.text = locationProvider.currentLatLng!.longitude.toStringAsFixed(6);
     } else {
-      // Default to UC Riverside
-      latController.text = '33.9737';
-      lngController.text = '-117.3281';
+      // Positive levels
+      if (floor.level == 1) {
+        return '1st Floor';
+      } else if (floor.level == 2) {
+        return '2nd Floor';
+      } else if (floor.level == 3) {
+        return '3rd Floor';
+      } else {
+        return '${floor.level}th Floor';
+      }
     }
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Building'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Building Name',
-                  hintText: 'Enter building name',
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: latController,
-                      decoration: const InputDecoration(labelText: 'Latitude'),
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      controller: lngController,
-                      decoration: const InputDecoration(labelText: 'Longitude'),
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  TextButton.icon(
-                    onPressed: () {
-                      if (locationProvider.currentLatLng != null) {
-                        latController.text = locationProvider.currentLatLng!.latitude.toStringAsFixed(6);
-                        lngController.text = locationProvider.currentLatLng!.longitude.toStringAsFixed(6);
-                      }
-                    },
-                    icon: const Icon(Icons.my_location),
-                    label: const Text('Use Current'),
-                  ),
-                  TextButton.icon(
-                    onPressed: () {
-                      latController.text = '33.9737';
-                      lngController.text = '-117.3281';
-                    },
-                    icon: const Icon(Icons.location_city),
-                    label: const Text('UCR Default'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (nameController.text.isNotEmpty &&
-                  latController.text.isNotEmpty &&
-                  lngController.text.isNotEmpty) {
-                final lat = double.tryParse(latController.text);
-                final lng = double.tryParse(lngController.text);
-                
-                if (lat != null && lng != null) {
-                  _addBuilding(nameController.text, LatLng(lat, lng));
-                  Navigator.pop(context);
-                }
-              }
-            },
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
   }
 
-  void _showAddFloorDialog(Building building) {
-    final nameController = TextEditingController();
-    final levelController = TextEditingController(text: '0');
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Add Floor to ${building.name}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(
-                labelText: 'Floor Name',
-                hintText: 'e.g., Ground Floor, First Floor',
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: levelController,
-              decoration: const InputDecoration(
-                labelText: 'Floor Level',
-                hintText: '0 = Ground, -1 = Basement, 1 = First',
-              ),
-              keyboardType: TextInputType.number,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (nameController.text.isNotEmpty) {
-                final level = int.tryParse(levelController.text) ?? 0;
-                _addFloor(building, nameController.text, level);
-                Navigator.pop(context);
-              }
-            },
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
+  /// Get floor display name with custom name if available
+  String getFloorDisplayNameWithCustom(Floor floor) {
+    if (floor.name.isNotEmpty && floor.name != getFloorDisplayName(floor)) {
+      return '${getFloorDisplayName(floor)} (${floor.name})';
+    }
+    return getFloorDisplayName(floor);
   }
 
-  void _addBuilding(String name, LatLng position) {
-    final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
-    final currentSystem = roadSystemProvider.currentSystem;
+  // Building selection methods
+  void selectBuilding(String? buildingId) {
+    if (_selectedBuildingId != buildingId) {
+      _selectedBuildingId = buildingId;
+      _selectedFloorId = null; // Reset floor selection
+      _isIndoorMode = buildingId != null;
+      
+      // Clear cache for the new building
+      _accessibilityCache.clear();
+      _connectivityCache.clear();
+      
+      notifyListeners();
+    }
+  }
+
+  void selectFloor(String? floorId) {
+    if (_selectedFloorId != floorId) {
+      _selectedFloorId = floorId;
+      notifyListeners();
+    }
+  }
+
+  void toggleIndoorMode() {
+    _isIndoorMode = !_isIndoorMode;
+    if (!_isIndoorMode) {
+      _selectedBuildingId = null;
+      _selectedFloorId = null;
+      _showFloorPlan = false;
+    }
+    notifyListeners();
+  }
+
+  void toggleFloorPlan() {
+    _showFloorPlan = !_showFloorPlan;
+    notifyListeners();
+  }
+
+  void exitIndoorMode() {
+    _isIndoorMode = false;
+    _selectedBuildingId = null;
+    _selectedFloorId = null;
+    _showFloorPlan = false;
+    notifyListeners();
+  }
+
+  // Helper methods for getting selected objects
+  Building? getSelectedBuilding(RoadSystem? roadSystem) {
+    if (roadSystem == null || _selectedBuildingId == null) return null;
     
-    if (currentSystem != null) {
-      final newBuilding = Building(
-        id: const Uuid().v4(),
-        name: name,
-        centerPosition: position,
+    try {
+      return roadSystem.buildings.firstWhere(
+        (building) => building.id == _selectedBuildingId,
       );
-      
-      final updatedBuildings = List<Building>.from(currentSystem.buildings)
-        ..add(newBuilding);
-      
-      final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
-      roadSystemProvider.updateCurrentSystem(updatedSystem);
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Building "$name" added successfully'),
-          backgroundColor: Colors.green,
-        ),
-      );
+    } catch (e) {
+      return null;
     }
   }
 
-  void _addFloor(Building building, String name, int level) {
-    final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
-    final currentSystem = roadSystemProvider.currentSystem;
+  Floor? getSelectedFloor(RoadSystem? roadSystem) {
+    final building = getSelectedBuilding(roadSystem);
+    if (building == null || _selectedFloorId == null) return null;
     
-    if (currentSystem != null) {
-      final newFloor = Floor(
-        id: const Uuid().v4(),
-        name: name,
-        level: level,
-        buildingId: building.id,
-        centerPosition: building.centerPosition,
+    try {
+      return building.floors.firstWhere(
+        (floor) => floor.id == _selectedFloorId,
       );
-      
-      final updatedFloors = List<Floor>.from(building.floors)..add(newFloor);
-      final updatedBuilding = building.copyWith(floors: updatedFloors);
-      
-      final updatedBuildings = currentSystem.buildings
-          .map((b) => b.id == building.id ? updatedBuilding : b)
-          .toList();
-      
-      final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
-      roadSystemProvider.updateCurrentSystem(updatedSystem);
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Floor "$name" added to ${building.name}'),
-          backgroundColor: Colors.green,
-        ),
-      );
+    } catch (e) {
+      return null;
     }
   }
 
-  void _handleBuildingAction(
-    String action,
-    Building building,
-    RoadSystemProvider roadSystemProvider,
-    BuildingProvider buildingProvider,
-  ) {
-    switch (action) {
-      case 'select':
-        buildingProvider.selectBuilding(building.id);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Selected ${building.name}')),
-        );
-        break;
-      case 'edit':
-        _showEditBuildingDialog(building);
-        break;
-      case 'add_floor':
-        _showAddFloorDialog(building);
-        break;
-      case 'manage_boundary':
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Boundary management - Navigate to map to set boundary')),
-        );
-        break;
-      case 'delete':
-        _showDeleteBuildingConfirmation(building, roadSystemProvider);
-        break;
-    }
-  }
-
-  void _handleFloorAction(
-    String action,
-    Floor floor,
-    Building building,
-    RoadSystemProvider roadSystemProvider,
-    BuildingProvider buildingProvider,
-  ) {
-    switch (action) {
-      case 'select':
-        buildingProvider.selectBuilding(building.id);
-        buildingProvider.selectFloor(floor.id);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Selected ${floor.name} in ${building.name}')),
-        );
-        break;
-      case 'edit':
-        _showEditFloorDialog(floor, building);
-        break;
-      case 'add_landmark':
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Navigate to map to add landmarks to this floor')),
-        );
-        break;
-      case 'delete':
-        _showDeleteFloorConfirmation(floor, building, roadSystemProvider);
-        break;
-    }
-  }
-
-  void _showEditBuildingDialog(Building building) {
-    final nameController = TextEditingController(text: building.name);
-    final latController = TextEditingController(
-      text: building.centerPosition.latitude.toStringAsFixed(6),
-    );
-    final lngController = TextEditingController(
-      text: building.centerPosition.longitude.toStringAsFixed(6),
-    );
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Edit Building'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(labelText: 'Building Name'),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: latController,
-                    decoration: const InputDecoration(labelText: 'Latitude'),
-                    keyboardType: TextInputType.number,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: lngController,
-                    decoration: const InputDecoration(labelText: 'Longitude'),
-                    keyboardType: TextInputType.number,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (nameController.text.isNotEmpty) {
-                final lat = double.tryParse(latController.text);
-                final lng = double.tryParse(lngController.text);
-                
-                if (lat != null && lng != null) {
-                  _updateBuilding(building, nameController.text, LatLng(lat, lng));
-                  Navigator.pop(context);
-                }
-              }
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showEditFloorDialog(Floor floor, Building building) {
-    final nameController = TextEditingController(text: floor.name);
-    final levelController = TextEditingController(text: floor.level.toString());
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Edit Floor in ${building.name}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(labelText: 'Floor Name'),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: levelController,
-              decoration: const InputDecoration(labelText: 'Floor Level'),
-              keyboardType: TextInputType.number,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (nameController.text.isNotEmpty) {
-                final level = int.tryParse(levelController.text) ?? floor.level;
-                _updateFloor(floor, building, nameController.text, level);
-                Navigator.pop(context);
-              }
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _updateBuilding(Building building, String name, LatLng position) {
-    final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
-    final currentSystem = roadSystemProvider.currentSystem;
+  // Auto-select appropriate floor when building is selected
+  void autoSelectFloor(Building building) {
+    if (building.floors.isEmpty) return;
     
-    if (currentSystem != null) {
-      final updatedBuilding = building.copyWith(
-        name: name,
-        centerPosition: position,
-      );
-      
-      final updatedBuildings = currentSystem.buildings
-          .map((b) => b.id == building.id ? updatedBuilding : b)
-          .toList();
-      
-      final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
-      roadSystemProvider.updateCurrentSystem(updatedSystem);
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Building "$name" updated')),
-      );
+    // Try to select ground floor (level 0) first
+    Floor? groundFloor;
+    try {
+      groundFloor = building.floors.firstWhere((floor) => floor.level == 0);
+    } catch (e) {
+      // No ground floor, select the first floor
+      groundFloor = building.floors.first;
     }
+    
+    selectFloor(groundFloor.id);
   }
 
-  void _updateFloor(Floor floor, Building building, String name, int level) {
-    final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
-    final currentSystem = roadSystemProvider.currentSystem;
+  // Get floors by level for a building
+  List<Floor> getFloorsByLevel(Building building) {
+    final floors = List<Floor>.from(building.floors);
+    floors.sort((a, b) => b.level.compareTo(a.level)); // Highest first
+    return floors;
+  }
+
+  // Get floors accessible from current floor
+  List<Floor> getAccessibleFloors(Floor currentFloor, Building building) {
+    final accessibleFloors = <Floor>[];
     
-    if (currentSystem != null) {
-      final updatedFloor = floor.copyWith(name: name, level: level, buildingId: '');
-      
-      final updatedFloors = building.floors
-          .map((f) => f.id == floor.id ? updatedFloor : f)
-          .toList();
-      
-      final updatedBuilding = building.copyWith(floors: updatedFloors);
-      
-      final updatedBuildings = currentSystem.buildings
-          .map((b) => b.id == building.id ? updatedBuilding : b)
-          .toList();
-      
-      final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
-      roadSystemProvider.updateCurrentSystem(updatedSystem);
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Floor "$name" updated')),
-      );
+    // Add directly connected floors
+    for (final floorId in currentFloor.connectedFloors) {
+      try {
+        final floor = building.floors.firstWhere((f) => f.id == floorId);
+        accessibleFloors.add(floor);
+      } catch (e) {
+        // Floor not found, skip
+      }
     }
-  }
-
-  void _showDeleteBuildingConfirmation(
-    Building building,
-    RoadSystemProvider roadSystemProvider,
-  ) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Building'),
-        content: Text(
-          'Are you sure you want to delete "${building.name}"? '
-          'This will also delete all floors and their contents.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              _deleteBuilding(building, roadSystemProvider);
-              Navigator.pop(context);
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showDeleteFloorConfirmation(
-    Floor floor,
-    Building building,
-    RoadSystemProvider roadSystemProvider,
-  ) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Floor'),
-        content: Text(
-          'Are you sure you want to delete "${floor.name}"? '
-          'This will also delete all roads and landmarks on this floor.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              _deleteFloor(floor, building, roadSystemProvider);
-              Navigator.pop(context);
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _deleteBuilding(Building building, RoadSystemProvider roadSystemProvider) {
-    final currentSystem = roadSystemProvider.currentSystem;
     
-    if (currentSystem != null) {
-      final updatedBuildings = currentSystem.buildings
-          .where((b) => b.id != building.id)
-          .toList();
+    // Add floors connected via vertical circulation
+    final hasElevator = currentFloor.landmarks.any((l) => l.type == 'elevator');
+    final hasStairs = currentFloor.landmarks.any((l) => l.type == 'stairs');
+    
+    if (hasElevator || hasStairs) {
+      for (final floor in building.floors) {
+        if (floor.id != currentFloor.id) {
+          final targetHasConnection = floor.landmarks.any((l) => 
+              (hasElevator && l.type == 'elevator') || 
+              (hasStairs && l.type == 'stairs'));
+          
+          if (targetHasConnection && !accessibleFloors.contains(floor)) {
+            accessibleFloors.add(floor);
+          }
+        }
+      }
+    }
+    
+    return accessibleFloors;
+  }
+
+  /// Get building accessibility analysis
+  Map<String, dynamic> getBuildingAccessibility(Building building) {
+    final cacheKey = 'accessibility_${building.id}';
+    if (_accessibilityCache.containsKey(cacheKey)) {
+      return _accessibilityCache[cacheKey]!;
+    }
+
+    int accessibleFloors = 0;
+    int elevatorsCount = 0;
+    int rampCount = 0;
+    int accessibleEntrances = 0;
+    final List<String> accessibilityFeatures = [];
+
+    for (final floor in building.floors) {
+      bool floorIsAccessible = false;
       
-      final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
-      roadSystemProvider.updateCurrentSystem(updatedSystem);
+      // Check for elevators
+      final floorElevators = floor.landmarks.where((l) => l.type == 'elevator').length;
+      elevatorsCount += floorElevators;
+      if (floorElevators > 0) {
+        floorIsAccessible = true;
+      }
+
+      // Check for ramps
+      final floorRamps = floor.landmarks.where((l) => l.type == 'ramp').length;
+      rampCount += floorRamps;
+      if (floorRamps > 0) {
+        floorIsAccessible = true;
+      }
+
+      // Check for accessible entrances
+      final entrances = floor.landmarks.where((l) => 
+          l.type == 'entrance' && l.name.toLowerCase().contains('accessible')).length;
+      accessibleEntrances += entrances;
+      if (entrances > 0) {
+        floorIsAccessible = true;
+      }
+
+      if (floorIsAccessible) {
+        accessibleFloors++;
+      }
+    }
+
+    // Determine accessibility features
+    if (elevatorsCount > 0) accessibilityFeatures.add('Elevators Available');
+    if (rampCount > 0) accessibilityFeatures.add('Wheelchair Ramps');
+    if (accessibleEntrances > 0) accessibilityFeatures.add('Accessible Entrances');
+
+    final result = {
+      'accessibleFloors': accessibleFloors,
+      'totalFloors': building.floors.length,
+      'elevators': elevatorsCount,
+      'ramps': rampCount,
+      'accessibleEntrances': accessibleEntrances,
+      'features': accessibilityFeatures,
+      'accessibilityScore': building.floors.isNotEmpty 
+          ? (accessibleFloors / building.floors.length * 100).round()
+          : 0,
+    };
+
+    _accessibilityCache[cacheKey] = result;
+    return result;
+  }
+
+  /// Get building connectivity analysis
+  Map<String, dynamic> getBuildingConnectivity(Building building) {
+    final cacheKey = 'connectivity_${building.id}';
+    if (_connectivityCache.containsKey(cacheKey)) {
+      return _connectivityCache[cacheKey]!;
+    }
+
+    final floorConnections = <String, List<String>>{};
+    int totalConnections = 0;
+    final verticalTransportFloors = <String>{};
+
+    for (final floor in building.floors) {
+      final connections = <String>[];
       
-      // Clear selection if deleted building was selected
-      final buildingProvider = Provider.of<BuildingProvider>(context, listen: false);
-      if (buildingProvider.selectedBuildingId == building.id) {
-        buildingProvider.reset();
+      // Direct connections
+      connections.addAll(floor.connectedFloors);
+      
+      // Vertical connections (elevators/stairs)
+      final hasVerticalTransport = floor.landmarks.any((l) => 
+          l.type == 'elevator' || l.type == 'stairs');
+      
+      if (hasVerticalTransport) {
+        verticalTransportFloors.add(floor.id);
+        
+        // Find other floors with vertical transport
+        for (final otherFloor in building.floors) {
+          if (otherFloor.id != floor.id) {
+            final otherHasTransport = otherFloor.landmarks.any((l) => 
+                l.type == 'elevator' || l.type == 'stairs');
+            
+            if (otherHasTransport && !connections.contains(otherFloor.id)) {
+              connections.add(otherFloor.id);
+            }
+          }
+        }
       }
       
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Building "${building.name}" deleted'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      floorConnections[floor.id] = connections;
+      totalConnections += connections.length;
     }
+
+    final result = {
+      'floorConnections': floorConnections,
+      'totalConnections': totalConnections,
+      'floorsWithVerticalTransport': verticalTransportFloors.length,
+      'totalFloors': building.floors.length,
+      'connectivityScore': building.floors.isNotEmpty
+          ? (verticalTransportFloors.length / building.floors.length * 100).round()
+          : 0,
+    };
+
+    _connectivityCache[cacheKey] = result;
+    return result;
   }
 
-  void _deleteFloor(Floor floor, Building building, RoadSystemProvider roadSystemProvider) {
-    final currentSystem = roadSystemProvider.currentSystem;
-    
-    if (currentSystem != null) {
-      final updatedFloors = building.floors
-          .where((f) => f.id != floor.id)
-          .toList();
-      
-      final updatedBuilding = building.copyWith(floors: updatedFloors);
-      
-      final updatedBuildings = currentSystem.buildings
-          .map((b) => b.id == building.id ? updatedBuilding : b)
-          .toList();
-      
-      final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
-      roadSystemProvider.updateCurrentSystem(updatedSystem);
-      
-      // Clear selection if deleted floor was selected
-      final buildingProvider = Provider.of<BuildingProvider>(context, listen: false);
-      if (buildingProvider.selectedFloorId == floor.id) {
-        buildingProvider.selectFloor('');
+  /// Check if a point is within building bounds
+  bool isPointInBuilding(LatLng point, Building building) {
+    if (building.boundaryPoints.isEmpty) return false;
+
+    int intersections = 0;
+    final vertices = building.boundaryPoints;
+
+    for (int i = 0; i < vertices.length; i++) {
+      final j = (i + 1) % vertices.length;
+      final vertex1 = vertices[i];
+      final vertex2 = vertices[j];
+
+      if (((vertex1.latitude > point.latitude) != (vertex2.latitude > point.latitude)) &&
+          (point.longitude < (vertex2.longitude - vertex1.longitude) * 
+          (point.latitude - vertex1.latitude) / (vertex2.latitude - vertex1.latitude) + vertex1.longitude)) {
+        intersections++;
       }
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Floor "${floor.name}" deleted'),
-          backgroundColor: Colors.red,
-        ),
-      );
     }
+
+    return intersections % 2 == 1;
   }
 
-  IconData _getFloorIcon(int level) {
-    if (level < 0) return Icons.arrow_downward;
-    if (level == 0) return Icons.business;
-    return Icons.arrow_upward;
+  /// Get the closest floor to a given level
+  Floor? getClosestFloor(Building building, int targetLevel) {
+    if (building.floors.isEmpty) return null;
+
+    Floor? closestFloor;
+    int minDifference = double.maxFinite.toInt();
+
+    for (final floor in building.floors) {
+      final difference = (floor.level - targetLevel).abs();
+      if (difference < minDifference) {
+        minDifference = difference;
+        closestFloor = floor;
+      }
+    }
+
+    return closestFloor;
+  }
+
+  /// Get floors within a level range
+  List<Floor> getFloorsInRange(Building building, int minLevel, int maxLevel) {
+    return building.floors.where((floor) => 
+        floor.level >= minLevel && floor.level <= maxLevel).toList();
+  }
+
+  /// Calculate building statistics
+  Map<String, dynamic> getBuildingStatistics(Building building) {
+    final stats = {
+      'totalFloors': building.floors.length,
+      'highestFloor': building.floors.isNotEmpty 
+          ? building.floors.map((f) => f.level).reduce(math.max)
+          : 0,
+      'lowestFloor': building.floors.isNotEmpty 
+          ? building.floors.map((f) => f.level).reduce(math.min)
+          : 0,
+      'totalLandmarks': building.floors.fold<int>(0, (sum, floor) => sum + floor.landmarks.length),
+      'totalRoads': building.floors.fold<int>(0, (sum, floor) => sum + floor.roads.length),
+      'floorsWithElevators': building.floors.where((f) => 
+          f.landmarks.any((l) => l.type == 'elevator')).length,
+      'floorsWithStairs': building.floors.where((f) => 
+          f.landmarks.any((l) => l.type == 'stairs')).length,
+      'floorsWithRestrooms': building.floors.where((f) => 
+          f.landmarks.any((l) => l.type == 'restroom')).length,
+    };
+
+    return stats;
+  }
+
+  /// Clear all caches (useful when building data changes)
+  void clearCaches() {
+    _accessibilityCache.clear();
+    _connectivityCache.clear();
+  }
+
+  /// Validate building selection
+  bool isValidSelection(RoadSystem? roadSystem) {
+    if (roadSystem == null) return false;
+    
+    final building = getSelectedBuilding(roadSystem);
+    if (building == null) return false;
+    
+    if (_selectedFloorId != null) {
+      final floor = getSelectedFloor(roadSystem);
+      return floor != null;
+    }
+    
+    return true;
+  }
+
+  /// Get navigation context for current selection
+  Map<String, dynamic>? getNavigationContext(RoadSystem? roadSystem) {
+    final building = getSelectedBuilding(roadSystem);
+    if (building == null) return null;
+
+    final floor = getSelectedFloor(roadSystem);
+    
+    return {
+      'building': building,
+      'floor': floor,
+      'isIndoorMode': _isIndoorMode,
+      'showFloorPlan': _showFloorPlan,
+      'availableFloors': building.floors,
+      'accessibleFloors': floor != null ? getAccessibleFloors(floor, building) : <Floor>[],
+    };
   }
 }
