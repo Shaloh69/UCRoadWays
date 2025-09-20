@@ -3,7 +3,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
-import 'dart:math';
+import 'dart:math' as math;
 import 'dart:async';
 import '../providers/location_provider.dart';
 import '../providers/road_system_provider.dart';
@@ -24,7 +24,7 @@ class UCRoadWaysMap extends StatefulWidget {
   State<UCRoadWaysMap> createState() => UCRoadWaysMapState();
 }
 
-class UCRoadWaysMapState extends State<UCRoadWaysMap> {
+class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserver {
   static const double _defaultLat = 33.9737; // UC Riverside latitude
   static const double _defaultLng = -117.3281; // UC Riverside longitude
   static const double _defaultZoom = 18.0; // Closer zoom for walking
@@ -41,38 +41,181 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
   // Auto-center state
   bool _hasInitialCentered = false;
   StreamSubscription<LatLng>? _locationSubscription;
+  bool _followUserLocation = true;
+  DateTime? _lastManualMove;
 
   // Offline map support
   late OfflineTileProvider _tileProvider;
+  bool _offlineMapInitialized = false;
+
+  // Map state
+  double _currentZoom = _defaultZoom;
+  LatLng _currentCenter = const LatLng(_defaultLat, _defaultLng);
+  bool _isMapReady = false;
+
+  // Error handling
+  String? _mapError;
+  int _tileLoadErrors = 0;
+  static const int _maxTileErrors = 10;
+
+  // Performance optimization
+  Timer? _debounceTimer;
+  bool _isAnimating = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _setupLocationListener();
     _initializeOfflineTileProvider();
+    _setupMapEventListeners();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _locationSubscription?.cancel();
+    _recordingTimer?.cancel();
+    _debounceTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    
+    if (state == AppLifecycleState.paused) {
+      // App is going to background, stop intensive operations
+      _recordingTimer?.cancel();
+    } else if (state == AppLifecycleState.resumed) {
+      // App is back in foreground, resume operations
+      if (_isRecordingRoad) {
+        _startRecordingTimer();
+      }
+    }
   }
 
   void _initializeOfflineTileProvider() {
-    _tileProvider = OfflineTileProvider(
-      onlineUrlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-      preferOffline: true,
-    );
+    try {
+      final offlineProvider = Provider.of<OfflineMapProvider>(context, listen: false);
+      
+      _tileProvider = OfflineTileProvider(
+        onlineUrlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        preferOffline: offlineProvider.preferOffline,
+      );
+      
+      _offlineMapInitialized = true;
+      debugPrint('Offline tile provider initialized');
+    } catch (e) {
+      debugPrint('Failed to initialize offline tile provider: $e');
+      _mapError = 'Failed to initialize offline maps';
+      if (mounted) setState(() {});
+    }
   }
 
   void _setupLocationListener() {
-    final locationProvider = Provider.of<LocationProvider>(context, listen: false);
-    _locationSubscription = locationProvider.locationStream.listen((position) {
-      if (!_hasInitialCentered && mounted) {
-        widget.mapController.move(position, _defaultZoom);
-        _hasInitialCentered = true;
+    try {
+      final locationProvider = Provider.of<LocationProvider>(context, listen: false);
+      _locationSubscription = locationProvider.locationStream.listen(
+        (position) {
+          if (!mounted) return;
+          
+          // Auto-center on first location
+          if (!_hasInitialCentered && _followUserLocation) {
+            _centerOnLocation(position, animate: true);
+            _hasInitialCentered = true;
+          } else if (_followUserLocation && _shouldFollowLocation()) {
+            _centerOnLocation(position, animate: false);
+          }
+        },
+        onError: (error) {
+          debugPrint('Location stream error in map widget: $error');
+        },
+      );
+    } catch (e) {
+      debugPrint('Failed to setup location listener: $e');
+    }
+  }
+
+  void _setupMapEventListeners() {
+    // Listen for map move events to detect manual movement
+    widget.mapController.mapEventStream.listen((event) {
+      if (!mounted) return;
+      
+      if (event is MapEventMove || event is MapEventMoveEnd) {
+        _currentCenter = event.center;
+        _currentZoom = event.zoom;
+        
+        // If user manually moved the map, stop following location temporarily
+        if (event.source == MapEventSource.onDrag ||
+            event.source == MapEventSource.doubleTapZoom ||
+            event.source == MapEventSource.scrollWheel) {
+          _lastManualMove = DateTime.now();
+          _followUserLocation = false;
+        }
+      }
+      
+      if (event is MapEventMoveEnd) {
+        _isAnimating = false;
+        setState(() {});
+      }
+      
+      if (event is MapEventMoveStart) {
+        _isAnimating = true;
       }
     });
+  }
+
+  bool _shouldFollowLocation() {
+    if (_lastManualMove == null) return true;
+    
+    // Resume following after 30 seconds of no manual movement
+    final timeSinceManualMove = DateTime.now().difference(_lastManualMove!);
+    return timeSinceManualMove.inSeconds > 30;
+  }
+
+  void _centerOnLocation(LatLng position, {bool animate = false}) {
+    if (!mounted || _isAnimating) return;
+    
+    try {
+      if (animate) {
+        _isAnimating = true;
+        widget.mapController.move(position, _currentZoom);
+      } else {
+        widget.mapController.move(position, _currentZoom);
+      }
+    } catch (e) {
+      debugPrint('Error centering on location: $e');
+    }
+  }
+
+  // Public method to enable location following
+  void enableLocationFollowing() {
+    _followUserLocation = true;
+    _lastManualMove = null;
+    
+    final locationProvider = Provider.of<LocationProvider>(context, listen: false);
+    if (locationProvider.currentLatLng != null) {
+      _centerOnLocation(locationProvider.currentLatLng!, animate: true);
+    }
+  }
+
+  // Public method to center on current location
+  void centerOnCurrentLocation() {
+    final locationProvider = Provider.of<LocationProvider>(context, listen: false);
+    if (locationProvider.currentLatLng != null) {
+      enableLocationFollowing();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Consumer4<LocationProvider, RoadSystemProvider, BuildingProvider, OfflineMapProvider>(
       builder: (context, locationProvider, roadSystemProvider, buildingProvider, offlineMapProvider, child) {
+        if (_mapError != null) {
+          return _buildErrorWidget();
+        }
+
         final currentSystem = roadSystemProvider.currentSystem;
         final currentLocation = locationProvider.currentLatLng;
         final selectedBuilding = buildingProvider.getSelectedBuilding(currentSystem);
@@ -80,360 +223,313 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
         
         return Stack(
           children: [
-            FlutterMap(
-              mapController: widget.mapController,
-              options: MapOptions(
-                initialCenter: _getMapCenter(currentLocation, currentSystem),
-                initialZoom: _getMapZoom(currentSystem, buildingProvider),
-                minZoom: 10.0,
-                maxZoom: 22.0,
-                onTap: (tapPosition, point) => _handleMapTap(point, buildingProvider, roadSystemProvider),
-                onLongPress: (tapPosition, point) => _handleMapLongPress(point, buildingProvider, roadSystemProvider),
-              ),
-              children: [
-                // Offline-first tile layer
-                TileLayer(
-                  tileProvider: _tileProvider,
-                  userAgentPackageName: 'com.ucroadways.app',
-                  tileSize: 256,
-                  maxZoom: 22,
-                ),
-                
-                // Building polygons (only show if not in indoor mode or if selected building)
-                if (currentSystem != null) ...[
-                  PolygonLayer(
-                    polygons: _buildBuildingPolygons(currentSystem, selectedBuilding, buildingProvider),
-                  ),
-                  
-                  // Roads layer
-                  PolylineLayer(
-                    polylines: _buildRoadPolylines(currentSystem, selectedFloor, buildingProvider),
-                  ),
-                  
-                  // Landmarks layer
-                  MarkerLayer(
-                    markers: [
-                      ..._buildLandmarkMarkers(currentSystem, selectedFloor, buildingProvider),
-                      ..._buildBuildingMarkers(currentSystem, buildingProvider),
-                    ],
-                  ),
-                  
-                  // Current location marker
-                  if (currentLocation != null)
-                    MarkerLayer(
-                      markers: [
-                        Marker(
-                          point: currentLocation,
-                          width: 20,
-                          height: 20,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.blue,
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 2),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  
-                  // Temporary road being recorded
-                  if (_isRecordingRoad && _tempRoadPoints.isNotEmpty)
-                    PolylineLayer(
-                      polylines: [
-                        Polyline(
-                          points: _tempRoadPoints,
-                          color: Colors.red.withOpacity(0.7),
-                          strokeWidth: 4.0,
-                          isDotted: true,
-                        ),
-                      ],
-                    ),
-                ],
-              ],
+            _buildMap(
+              context,
+              currentSystem,
+              currentLocation,
+              selectedBuilding,
+              selectedFloor,
+              buildingProvider,
+              offlineMapProvider,
             ),
             
-            // Download progress indicator
-            if (offlineMapProvider.isDownloading)
-              Positioned(
-                top: 50,
-                left: 16,
-                right: 16,
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
-                          children: [
-                            const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                'Downloading ${offlineMapProvider.currentRegionName}',
-                                style: const TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: offlineMapProvider.cancelDownload,
-                              child: const Text('Cancel'),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        LinearProgressIndicator(
-                          value: offlineMapProvider.downloadProgress,
-                          backgroundColor: Colors.grey[300],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${offlineMapProvider.currentTileCount}/${offlineMapProvider.totalTileCount} tiles (${(offlineMapProvider.downloadProgress * 100).toStringAsFixed(1)}%)',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+            // Map controls overlay
+            _buildMapControls(locationProvider),
             
-            // Recording/Adding indicators
-            if (_isRecordingRoad || _isAddingLandmark || _isAddingBuilding)
-              Positioned(
-                bottom: 100,
-                left: 16,
-                right: 16,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-                  decoration: BoxDecoration(
-                    color: _isRecordingRoad ? Colors.red : _isAddingLandmark ? Colors.green : Colors.purple,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        _isRecordingRoad ? Icons.radio_button_checked : 
-                        _isAddingLandmark ? Icons.place : Icons.business,
-                        color: Colors.white,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        _isRecordingRoad 
-                            ? 'Recording road... (${_tempRoadPoints.length} points)'
-                            : _isAddingLandmark 
-                                ? 'Tap to add landmark'
-                                : 'Tap to add building',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                      ),
-                      const Spacer(),
-                      if (_isRecordingRoad)
-                        TextButton(
-                          onPressed: stopRoadRecording,
-                          child: const Text('Stop', style: TextStyle(color: Colors.white)),
-                        ),
-                      IconButton(
-                        onPressed: () {
-                          setState(() {
-                            _isRecordingRoad = false;
-                            _isAddingLandmark = false;
-                            _isAddingBuilding = false;
-                            _tempRoadPoints.clear();
-                          });
-                        },
-                        icon: const Icon(Icons.close, color: Colors.white),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            // Recording indicator
+            if (_isRecordingRoad) _buildRecordingIndicator(),
+            
+            // Map status indicators
+            _buildStatusIndicators(locationProvider, offlineMapProvider),
           ],
         );
       },
     );
   }
 
-  @override
-  void dispose() {
-    _recordingTimer?.cancel();
-    _locationSubscription?.cancel();
-    super.dispose();
-  }
-
-  // MAP INTERACTION HANDLERS
-
-  void _handleMapTap(LatLng point, BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
-    if (_isAddingBuilding) {
-      _showBuildingDialog(point, roadSystemProvider);
-    } else if (_isAddingLandmark) {
-      _showLandmarkDialog(point, buildingProvider, roadSystemProvider);
-    }
-  }
-
-  void _handleMapLongPress(LatLng point, BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
-    if (_isRecordingRoad) {
-      _addPointWhileWalking(point);
-    }
-  }
-
-  // ROAD RECORDING METHODS
-
-  void startRoadRecording() {
-    setState(() {
-      _isRecordingRoad = true;
-      _tempRoadPoints.clear();
-      _lastRecordedPoint = null;
-    });
-
-    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      final locationProvider = Provider.of<LocationProvider>(context, listen: false);
-      final currentLocation = locationProvider.currentLatLng;
-      
-      if (currentLocation != null) {
-        _addPointWhileWalking(currentLocation);
-      }
-    });
-  }
-
-  void stopRoadRecording() {
-    if (_tempRoadPoints.length >= 2) {
-      _showRoadSaveDialog();
-    } else {
-      setState(() {
-        _isRecordingRoad = false;
-        _tempRoadPoints.clear();
-      });
-      _recordingTimer?.cancel();
-    }
-  }
-
-  void _addPointWhileWalking(LatLng point) {
-    if (_lastRecordedPoint != null) {
-      final distance = _calculateDistance(_lastRecordedPoint!, point);
-      if (distance < _minDistanceForNewPoint) {
-        return; // Too close to last point
-      }
-    }
-    
-    setState(() {
-      _tempRoadPoints.add(point);
-      _lastRecordedPoint = point;
-    });
-  }
-
-  double _calculateDistance(LatLng point1, LatLng point2) {
-    const double earthRadius = 6371000; // meters
-    
-    final lat1Rad = point1.latitude * (pi / 180);
-    final lat2Rad = point2.latitude * (pi / 180);
-    final deltaLatRad = (point2.latitude - point1.latitude) * (pi / 180);
-    final deltaLngRad = (point2.longitude - point1.longitude) * (pi / 180);
-    
-    final a = sin(deltaLatRad / 2) * sin(deltaLatRad / 2) +
-              cos(lat1Rad) * cos(lat2Rad) *
-              sin(deltaLngRad / 2) * sin(deltaLngRad / 2);
-    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-    
-    return earthRadius * c;
-  }
-
-  void _saveRoad(String name, String type, double width, bool isOneWay) {
-    if (_tempRoadPoints.length < 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Road must have at least 2 points'),
-          backgroundColor: Colors.red,
+  Widget _buildMap(
+    BuildContext context,
+    RoadSystem? currentSystem,
+    LatLng? currentLocation,
+    Building? selectedBuilding,
+    Floor? selectedFloor,
+    BuildingProvider buildingProvider,
+    OfflineMapProvider offlineMapProvider,
+  ) {
+    return FlutterMap(
+      mapController: widget.mapController,
+      options: MapOptions(
+        initialCenter: _getMapCenter(currentLocation, currentSystem),
+        initialZoom: _getMapZoom(currentSystem, buildingProvider),
+        minZoom: 10.0,
+        maxZoom: 22.0,
+        onTap: (tapPosition, point) => _handleMapTap(
+          point,
+          currentSystem,
+          roadSystemProvider: Provider.of<RoadSystemProvider>(context, listen: false),
+          buildingProvider: buildingProvider,
         ),
-      );
-      return;
-    }
-
-    final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
-    final buildingProvider = Provider.of<BuildingProvider>(context, listen: false);
-    final currentSystem = roadSystemProvider.currentSystem;
-    
-    if (currentSystem == null) return;
-
-    final newRoad = Road(
-      id: const Uuid().v4(),
-      name: name,
-      points: List<LatLng>.from(_tempRoadPoints),
-      type: type,
-      width: width,
-      isOneWay: isOneWay,
-      floorId: buildingProvider.isIndoorMode ? (buildingProvider.selectedFloorId ?? '') : '',
+        onLongPress: (tapPosition, point) => _handleMapLongPress(point),
+        onMapReady: () {
+          _isMapReady = true;
+          debugPrint('Map is ready');
+        },
+        onPositionChanged: (position, hasGesture) {
+          _debounceTimer?.cancel();
+          _debounceTimer = Timer(const Duration(milliseconds: 100), () {
+            if (mounted) {
+              _currentCenter = position.center!;
+              _currentZoom = position.zoom!;
+            }
+          });
+        },
+      ),
+      children: [
+        // Tile layer with error handling
+        TileLayer(
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          tileProvider: _offlineMapInitialized ? _tileProvider : NetworkTileProvider(),
+          userAgentPackageName: 'com.example.ucroads',
+          maxZoom: 19,
+          errorTileCallback: (tile, error, stackTrace) {
+            _tileLoadErrors++;
+            if (_tileLoadErrors > _maxTileErrors) {
+              debugPrint('Too many tile load errors, falling back to online mode');
+              if (mounted) {
+                setState(() {
+                  _mapError = 'Map loading issues detected';
+                });
+              }
+            }
+          },
+        ),
+        
+        // Building polygons
+        if (currentSystem != null) ..._buildBuildingPolygons(currentSystem, selectedBuilding, buildingProvider),
+        
+        // Road polylines
+        if (currentSystem != null) ..._buildRoadPolylines(currentSystem, selectedFloor, buildingProvider),
+        
+        // Temporary road being recorded
+        if (_tempRoadPoints.isNotEmpty) ..._buildTempRoadPolylines(),
+        
+        // Landmark markers
+        if (currentSystem != null) ..._buildLandmarkMarkers(currentSystem, selectedFloor, buildingProvider),
+        
+        // Current location marker
+        if (currentLocation != null) _buildCurrentLocationMarker(currentLocation, locationProvider),
+        
+        // Location history trail
+        if (locationProvider.locationHistory.isNotEmpty) _buildLocationTrail(locationProvider),
+      ],
     );
-
-    if (buildingProvider.isIndoorMode) {
-      // Add to specific floor
-      final selectedBuilding = buildingProvider.getSelectedBuilding(currentSystem);
-      final selectedFloor = buildingProvider.getSelectedFloor(currentSystem);
-      
-      if (selectedBuilding != null && selectedFloor != null) {
-        final updatedRoads = List<Road>.from(selectedFloor.roads)..add(newRoad);
-        final updatedFloor = selectedFloor.copyWith(roads: updatedRoads, buildingId: '');
-        
-        final updatedFloors = selectedBuilding.floors
-            .map((f) => f.id == selectedFloor.id ? updatedFloor : f)
-            .toList();
-        final updatedBuilding = selectedBuilding.copyWith(floors: updatedFloors);
-        
-        final updatedBuildings = currentSystem.buildings
-            .map((b) => b.id == selectedBuilding.id ? updatedBuilding : b)
-            .toList();
-        final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
-        
-        roadSystemProvider.updateCurrentSystem(updatedSystem);
-        
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Indoor road "$name" added to ${selectedFloor.name}'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } else {
-      // Add to outdoor roads
-      final updatedRoads = List<Road>.from(currentSystem.outdoorRoads)..add(newRoad);
-      final updatedSystem = currentSystem.copyWith(outdoorRoads: updatedRoads);
-      
-      roadSystemProvider.updateCurrentSystem(updatedSystem);
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Outdoor road "$name" added'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    }
-
-    setState(() {
-      _isRecordingRoad = false;
-      _tempRoadPoints.clear();
-    });
-    _recordingTimer?.cancel();
   }
 
-  // MAP RENDERING METHODS
+  Widget _buildErrorWidget() {
+    return Container(
+      color: Colors.grey[300],
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline, size: 64, color: Colors.red),
+            const SizedBox(height: 16),
+            Text(
+              'Map Error',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 8),
+            Text(_mapError ?? 'Unknown map error'),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: () {
+                setState(() {
+                  _mapError = null;
+                  _tileLoadErrors = 0;
+                });
+                _initializeOfflineTileProvider();
+              },
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMapControls(LocationProvider locationProvider) {
+    return Positioned(
+      right: 16,
+      bottom: 100,
+      child: Column(
+        children: [
+          // Location button
+          FloatingActionButton(
+            mini: true,
+            heroTag: "location_btn",
+            onPressed: locationProvider.hasLocation ? centerOnCurrentLocation : null,
+            backgroundColor: _followUserLocation ? Colors.blue : Colors.white,
+            child: Icon(
+              _followUserLocation ? Icons.my_location : Icons.location_searching,
+              color: _followUserLocation ? Colors.white : Colors.blue,
+            ),
+          ),
+          const SizedBox(height: 8),
+          
+          // Zoom in button
+          FloatingActionButton(
+            mini: true,
+            heroTag: "zoom_in_btn",
+            onPressed: () {
+              final newZoom = (_currentZoom + 1).clamp(10.0, 22.0);
+              widget.mapController.move(_currentCenter, newZoom);
+            },
+            child: const Icon(Icons.zoom_in),
+          ),
+          const SizedBox(height: 8),
+          
+          // Zoom out button
+          FloatingActionButton(
+            mini: true,
+            heroTag: "zoom_out_btn",
+            onPressed: () {
+              final newZoom = (_currentZoom - 1).clamp(10.0, 22.0);
+              widget.mapController.move(_currentCenter, newZoom);
+            },
+            child: const Icon(Icons.zoom_out),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRecordingIndicator() {
+    return Positioned(
+      top: 16,
+      left: 16,
+      child: Card(
+        color: Colors.red,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.fiber_manual_record, color: Colors.white, size: 16),
+              const SizedBox(width: 8),
+              const Text(
+                'Recording Road',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${_tempRoadPoints.length} points',
+                style: const TextStyle(color: Colors.white70),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusIndicators(LocationProvider locationProvider, OfflineMapProvider offlineMapProvider) {
+    return Positioned(
+      top: 16,
+      right: 16,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          // GPS status
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    locationProvider.isTracking ? Icons.gps_fixed : Icons.gps_off,
+                    size: 16,
+                    color: locationProvider.isTracking ? Colors.green : Colors.red,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    locationProvider.isTracking ? 'GPS' : 'NO GPS',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          // Offline map status
+          if (offlineMapProvider.preferOffline) ...[
+            const SizedBox(height: 4),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.offline_pin,
+                      size: 16,
+                      color: _offlineMapInitialized ? Colors.blue : Colors.orange,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'OFFLINE',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          
+          // Download status
+          if (offlineMapProvider.isDownloading) ...[
+            const SizedBox(height: 4),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Downloading...', style: TextStyle(fontSize: 10)),
+                    SizedBox(
+                      width: 100,
+                      child: LinearProgressIndicator(
+                        value: offlineMapProvider.downloadProgress,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 
   LatLng _getMapCenter(LatLng? currentLocation, RoadSystem? currentSystem) {
     if (currentLocation != null) {
       return currentLocation;
     }
-    if (currentSystem != null) {
-      return currentSystem.centerPosition;
+    
+    if (currentSystem != null && currentSystem.buildings.isNotEmpty) {
+      return currentSystem.buildings.first.centerPosition;
     }
+    
     return const LatLng(_defaultLat, _defaultLng);
   }
 
   double _getMapZoom(RoadSystem? currentSystem, BuildingProvider buildingProvider) {
     if (buildingProvider.isIndoorMode) {
-      return 21.0; // Higher zoom for indoor details
+      return 20.0; // Closer zoom for indoor navigation
     }
-    return currentSystem?.zoom ?? _defaultZoom;
+    
+    return currentSystem?.buildings.isNotEmpty == true ? 17.0 : _defaultZoom;
   }
 
   List<Polygon> _buildBuildingPolygons(RoadSystem system, Building? selectedBuilding, BuildingProvider buildingProvider) {
@@ -488,6 +584,19 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
     return polylines;
   }
 
+  List<Polyline> _buildTempRoadPolylines() {
+    if (_tempRoadPoints.length < 2) return [];
+    
+    return [
+      Polyline(
+        points: _tempRoadPoints,
+        color: Colors.red.withOpacity(0.8),
+        strokeWidth: 4.0,
+        isDotted: true,
+      ),
+    ];
+  }
+
   Color _getRoadColor(String type) {
     switch (type) {
       case 'corridor':
@@ -511,68 +620,45 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
     // Outdoor landmarks (always visible unless in indoor mode)
     if (!buildingProvider.isIndoorMode) {
       for (final building in system.buildings) {
-        for (final floor in building.floors) {
-          if (floor.level == 0) { // Ground floor landmarks visible outdoors
-            markers.addAll(floor.landmarks.map((landmark) => _createLandmarkMarker(landmark)));
-          }
+        final groundFloor = building.floors.where((f) => f.level == 0).firstOrNull;
+        if (groundFloor != null) {
+          markers.addAll(groundFloor.landmarks.map((landmark) => _createLandmarkMarker(landmark, false)));
         }
       }
     }
     
     // Indoor landmarks (only for selected floor)
     if (buildingProvider.isIndoorMode && selectedFloor != null) {
-      markers.addAll(selectedFloor.landmarks.map((landmark) => _createLandmarkMarker(landmark)));
+      markers.addAll(selectedFloor.landmarks.map((landmark) => _createLandmarkMarker(landmark, true)));
     }
     
     return markers;
   }
 
-  List<Marker> _buildBuildingMarkers(RoadSystem system, BuildingProvider buildingProvider) {
-    if (buildingProvider.isIndoorMode) return [];
-    
-    return system.buildings.map((building) => Marker(
-      point: building.centerPosition,
-      width: 60,
-      height: 40,
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.purple.withOpacity(0.9),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.white, width: 1),
-        ),
-        child: Center(
-          child: Text(
-            building.name,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 10,
-              fontWeight: FontWeight.bold,
-            ),
-            textAlign: TextAlign.center,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ),
-    )).toList();
-  }
-
-  Marker _createLandmarkMarker(Landmark landmark) {
+  Marker _createLandmarkMarker(Landmark landmark, bool isIndoor) {
     return Marker(
       point: landmark.position,
-      width: 30,
-      height: 30,
+      width: 40,
+      height: 40,
       child: GestureDetector(
-        onTap: () => _showLandmarkInfo(landmark),
+        onTap: () => _showLandmarkDetails(landmark),
         child: Container(
           decoration: BoxDecoration(
             color: _getLandmarkColor(landmark.type),
             shape: BoxShape.circle,
             border: Border.all(color: Colors.white, width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.3),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
           child: Icon(
             _getLandmarkIcon(landmark.type),
             color: Colors.white,
-            size: 16,
+            size: 20,
           ),
         ),
       ),
@@ -589,10 +675,12 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
         return Colors.orange;
       case 'restroom':
         return Colors.cyan;
-      case 'office':
+      case 'information':
         return Colors.purple;
-      case 'classroom':
-        return Colors.indigo;
+      case 'emergency_exit':
+        return Colors.red;
+      case 'parking':
+        return Colors.brown;
       default:
         return Colors.grey;
     }
@@ -608,201 +696,151 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
         return Icons.stairs;
       case 'restroom':
         return Icons.wc;
-      case 'office':
-        return Icons.business_center;
-      case 'classroom':
-        return Icons.school;
+      case 'information':
+        return Icons.info;
+      case 'emergency_exit':
+        return Icons.emergency_exit;
+      case 'parking':
+        return Icons.local_parking;
       default:
         return Icons.place;
     }
   }
 
-  // ADDING CONTROLS
-
-  void startAddingLandmark() {
-    setState(() {
-      _isAddingLandmark = true;
-      _isAddingBuilding = false;
-    });
-  }
-
-  void startAddingBuilding() {
-    setState(() {
-      _isAddingBuilding = true;
-      _isAddingLandmark = false;
-    });
-  }
-
-  // DIALOG METHODS
-
-  void _showRoadSaveDialog() {
-    String name = '';
-    String type = 'corridor';
-    double width = 3.0;
-    bool isOneWay = false;
-
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('Save Road'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                decoration: const InputDecoration(labelText: 'Road Name'),
-                onChanged: (value) => name = value,
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                decoration: const InputDecoration(labelText: 'Road Type'),
-                value: type,
-                items: const [
-                  DropdownMenuItem(value: 'corridor', child: Text('Corridor')),
-                  DropdownMenuItem(value: 'hallway', child: Text('Hallway')),
-                  DropdownMenuItem(value: 'walkway', child: Text('Walkway')),
-                  DropdownMenuItem(value: 'road', child: Text('Road')),
-                  DropdownMenuItem(value: 'path', child: Text('Path')),
-                ],
-                onChanged: (value) => setState(() => type = value!),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  const Text('Width: '),
-                  Expanded(
-                    child: Slider(
-                      value: width,
-                      min: 1.0,
-                      max: 10.0,
-                      divisions: 18,
-                      label: '${width.toStringAsFixed(1)}m',
-                      onChanged: (value) => setState(() => width = value),
-                    ),
-                  ),
-                ],
-              ),
-              CheckboxListTile(
-                title: const Text('One Way'),
-                value: isOneWay,
-                onChanged: (value) => setState(() => isOneWay = value!),
-              ),
-            ],
+  Widget _buildCurrentLocationMarker(LatLng currentLocation, LocationProvider locationProvider) {
+    return MarkerLayer(
+      markers: [
+        Marker(
+          point: currentLocation,
+          width: 40,
+          height: 40,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.blue,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 3),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.blue.withOpacity(0.3),
+                  blurRadius: 10,
+                  spreadRadius: 5,
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.my_location,
+              color: Colors.white,
+              size: 20,
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                this.setState(() {
-                  _isRecordingRoad = false;
-                  _tempRoadPoints.clear();
-                });
-                _recordingTimer?.cancel();
-              },
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: name.isNotEmpty ? () {
-                Navigator.of(context).pop();
-                _saveRoad(name, type, width, isOneWay);
-              } : null,
-              child: const Text('Save'),
-            ),
-          ],
         ),
-      ),
+        
+        // Accuracy circle
+        if (locationProvider.accuracy > 0 && locationProvider.accuracy < 100)
+          Marker(
+            point: currentLocation,
+            width: locationProvider.accuracy * 2,
+            height: locationProvider.accuracy * 2,
+            child: Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.blue.withOpacity(0.1),
+                border: Border.all(
+                  color: Colors.blue.withOpacity(0.3),
+                  width: 1,
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 
-  void _showLandmarkDialog(LatLng point, BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
-    String name = '';
-    String type = 'office';
-    String description = '';
+  Widget _buildLocationTrail(LocationProvider locationProvider) {
+    if (locationProvider.locationHistory.length < 2) {
+      return const SizedBox.shrink();
+    }
 
-    showDialog(
+    return PolylineLayer(
+      polylines: [
+        Polyline(
+          points: locationProvider.locationHistory,
+          color: Colors.blue.withOpacity(0.6),
+          strokeWidth: 3.0,
+          isDotted: true,
+        ),
+      ],
+    );
+  }
+
+  void _handleMapTap(LatLng point, RoadSystem? currentSystem, {
+    required RoadSystemProvider roadSystemProvider,
+    required BuildingProvider buildingProvider,
+  }) {
+    if (_isAddingLandmark) {
+      _addLandmarkAtPoint(point, currentSystem, roadSystemProvider, buildingProvider);
+    } else if (_isAddingBuilding) {
+      _addBuildingAtPoint(point, roadSystemProvider);
+    }
+  }
+
+  void _handleMapLongPress(LatLng point) {
+    if (_isRecordingRoad) {
+      _stopRecordingRoad();
+    } else {
+      _showLocationOptions(point);
+    }
+  }
+
+  void _showLocationOptions(LatLng point) {
+    showModalBottomSheet(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Landmark'),
-        content: Column(
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(16),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
-              decoration: const InputDecoration(labelText: 'Landmark Name'),
-              onChanged: (value) => name = value,
+            Text(
+              'Location: ${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}',
+              style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              decoration: const InputDecoration(labelText: 'Landmark Type'),
-              value: type,
-              items: const [
-                DropdownMenuItem(value: 'entrance', child: Text('Entrance')),
-                DropdownMenuItem(value: 'elevator', child: Text('Elevator')),
-                DropdownMenuItem(value: 'stairs', child: Text('Stairs')),
-                DropdownMenuItem(value: 'restroom', child: Text('Restroom')),
-                DropdownMenuItem(value: 'office', child: Text('Office')),
-                DropdownMenuItem(value: 'classroom', child: Text('Classroom')),
-              ],
-              onChanged: (value) => type = value!,
+            ListTile(
+              leading: const Icon(Icons.add_location),
+              title: const Text('Add Landmark'),
+              onTap: () {
+                Navigator.pop(context);
+                _addLandmarkAtPoint(
+                  point,
+                  Provider.of<RoadSystemProvider>(context, listen: false).currentSystem,
+                  Provider.of<RoadSystemProvider>(context, listen: false),
+                  Provider.of<BuildingProvider>(context, listen: false),
+                );
+              },
             ),
-            const SizedBox(height: 16),
-            TextField(
-              decoration: const InputDecoration(labelText: 'Description (optional)'),
-              onChanged: (value) => description = value,
+            ListTile(
+              leading: const Icon(Icons.business),
+              title: const Text('Add Building'),
+              onTap: () {
+                Navigator.pop(context);
+                _addBuildingAtPoint(point, Provider.of<RoadSystemProvider>(context, listen: false));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.route),
+              title: const Text('Start Recording Road'),
+              onTap: () {
+                Navigator.pop(context);
+                _startRecordingRoad(point);
+              },
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              setState(() => _isAddingLandmark = false);
-            },
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: name.isNotEmpty ? () {
-              Navigator.of(context).pop();
-              _saveLandmark(point, name, type, description, buildingProvider, roadSystemProvider);
-            } : null,
-            child: const Text('Add'),
-          ),
-        ],
       ),
     );
   }
 
-  void _showBuildingDialog(LatLng point, RoadSystemProvider roadSystemProvider) {
-    String name = '';
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Building'),
-        content: TextField(
-          decoration: const InputDecoration(labelText: 'Building Name'),
-          onChanged: (value) => name = value,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              setState(() => _isAddingBuilding = false);
-            },
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: name.isNotEmpty ? () {
-              Navigator.of(context).pop();
-              _saveBuilding(point, name, roadSystemProvider);
-            } : null,
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showLandmarkInfo(Landmark landmark) {
+  void _showLandmarkDetails(Landmark landmark) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -812,15 +850,14 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Type: ${landmark.type}'),
-            if (landmark.description.isNotEmpty) ...[
-              const SizedBox(height: 8),
+            if (landmark.description.isNotEmpty)
               Text('Description: ${landmark.description}'),
-            ],
+            Text('Position: ${landmark.position.latitude.toStringAsFixed(6)}, ${landmark.position.longitude.toStringAsFixed(6)}'),
           ],
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.pop(context),
             child: const Text('Close'),
           ),
         ],
@@ -828,99 +865,381 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> {
     );
   }
 
-  // SAVE METHODS
+  // Road recording methods
+  void _startRecordingRoad(LatLng startPoint) {
+    setState(() {
+      _isRecordingRoad = true;
+      _tempRoadPoints = [startPoint];
+      _lastRecordedPoint = startPoint;
+    });
+    
+    _startRecordingTimer();
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Recording road... Long press to stop'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
 
-  void _saveLandmark(LatLng point, String name, String type, String description, 
-                     BuildingProvider buildingProvider, RoadSystemProvider roadSystemProvider) {
-    final currentSystem = roadSystemProvider.currentSystem;
-    if (currentSystem == null) return;
+  void _startRecordingTimer() {
+    _recordingTimer?.cancel();
+    _recordingTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+      _recordLocationForRoad();
+    });
+  }
 
-    final newLandmark = Landmark(
+  void _recordLocationForRoad() {
+    final locationProvider = Provider.of<LocationProvider>(context, listen: false);
+    final currentLocation = locationProvider.currentLatLng;
+    
+    if (currentLocation != null && _lastRecordedPoint != null) {
+      final distance = _calculateDistance(_lastRecordedPoint!, currentLocation);
+      
+      if (distance >= _minDistanceForNewPoint) {
+        setState(() {
+          _tempRoadPoints.add(currentLocation);
+          _lastRecordedPoint = currentLocation;
+        });
+      }
+    }
+  }
+
+  void _stopRecordingRoad() {
+    if (!_isRecordingRoad || _tempRoadPoints.length < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Need at least 2 points to create a road')),
+      );
+      _cancelRecordingRoad();
+      return;
+    }
+
+    _recordingTimer?.cancel();
+    
+    // Show dialog to save the road
+    _showSaveRoadDialog();
+  }
+
+  void _cancelRecordingRoad() {
+    setState(() {
+      _isRecordingRoad = false;
+      _tempRoadPoints.clear();
+      _lastRecordedPoint = null;
+    });
+    _recordingTimer?.cancel();
+  }
+
+  void _showSaveRoadDialog() {
+    final nameController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Save Road'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(
+                labelText: 'Road Name',
+                hintText: 'Enter road name',
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text('Points: ${_tempRoadPoints.length}'),
+            Text('Length: ${_calculateRoadLength(_tempRoadPoints).toStringAsFixed(1)}m'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _cancelRecordingRoad();
+            },
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _saveRecordedRoad(nameController.text.trim());
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _saveRecordedRoad(String name) {
+    final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
+    final buildingProvider = Provider.of<BuildingProvider>(context, listen: false);
+    
+    if (name.isEmpty) name = 'Road ${DateTime.now().millisecondsSinceEpoch}';
+    
+    final road = Road(
+      id: const Uuid().v4(),
+      name: name,
+      points: List.from(_tempRoadPoints),
+      type: buildingProvider.isIndoorMode ? 'corridor' : 'path',
+      width: 3.0,
+      isOneWay: false,
+      floorId: buildingProvider.selectedFloorId,
+      connectedIntersections: [],
+      properties: {
+        'created': DateTime.now().toIso8601String(),
+        'recordedLength': _calculateRoadLength(_tempRoadPoints),
+      },
+    );
+    
+    if (buildingProvider.isIndoorMode) {
+      roadSystemProvider.addIndoorRoad(road, buildingProvider.selectedFloorId!);
+    } else {
+      roadSystemProvider.addOutdoorRoad(road);
+    }
+    
+    _cancelRecordingRoad();
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Road "$name" saved successfully')),
+    );
+  }
+
+  double _calculateRoadLength(List<LatLng> points) {
+    if (points.length < 2) return 0.0;
+    
+    double length = 0.0;
+    for (int i = 0; i < points.length - 1; i++) {
+      length += _calculateDistance(points[i], points[i + 1]);
+    }
+    return length;
+  }
+
+  double _calculateDistance(LatLng point1, LatLng point2) {
+    const double earthRadius = 6371000; // meters
+    final double lat1Rad = point1.latitude * math.pi / 180;
+    final double lat2Rad = point2.latitude * math.pi / 180;
+    final double deltaLatRad = (point2.latitude - point1.latitude) * math.pi / 180;
+    final double deltaLngRad = (point2.longitude - point1.longitude) * math.pi / 180;
+
+    final double a = math.sin(deltaLatRad / 2) * math.sin(deltaLatRad / 2) +
+        math.cos(lat1Rad) * math.cos(lat2Rad) * math.sin(deltaLngRad / 2) * math.sin(deltaLngRad / 2);
+    final double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+
+    return earthRadius * c;
+  }
+
+  void _addLandmarkAtPoint(LatLng point, RoadSystem? currentSystem, 
+      RoadSystemProvider roadSystemProvider, BuildingProvider buildingProvider) {
+    
+    if (currentSystem == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please create or select a road system first')),
+      );
+      return;
+    }
+
+    _showAddLandmarkDialog(point, roadSystemProvider, buildingProvider);
+  }
+
+  void _showAddLandmarkDialog(LatLng point, RoadSystemProvider roadSystemProvider, 
+      BuildingProvider buildingProvider) {
+    
+    final nameController = TextEditingController();
+    final descriptionController = TextEditingController();
+    String selectedType = 'information';
+    
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Add Landmark'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(labelText: 'Name'),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: selectedType,
+                decoration: const InputDecoration(labelText: 'Type'),
+                items: [
+                  'information', 'entrance', 'elevator', 'stairs', 'restroom',
+                  'emergency_exit', 'parking', 'office', 'classroom', 'laboratory'
+                ].map((type) => DropdownMenuItem(
+                  value: type,
+                  child: Text(type.replaceAll('_', ' ').toUpperCase()),
+                )).toList(),
+                onChanged: (value) {
+                  setState(() {
+                    selectedType = value!;
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: descriptionController,
+                decoration: const InputDecoration(labelText: 'Description (optional)'),
+                maxLines: 2,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _saveLandmark(point, nameController.text.trim(), selectedType,
+                    descriptionController.text.trim(), roadSystemProvider, buildingProvider);
+              },
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _saveLandmark(LatLng point, String name, String type, String description,
+      RoadSystemProvider roadSystemProvider, BuildingProvider buildingProvider) {
+    
+    if (name.isEmpty) name = type.replaceAll('_', ' ').toUpperCase();
+    
+    final landmark = Landmark(
       id: const Uuid().v4(),
       name: name,
       type: type,
       position: point,
-      floorId: buildingProvider.isIndoorMode ? (buildingProvider.selectedFloorId ?? '') : '',
+      floorId: buildingProvider.selectedFloorId,
       description: description,
-      buildingId: buildingProvider.isIndoorMode ? (buildingProvider.selectedBuildingId ?? '') : '',
+      connectedFloors: [],
+      buildingId: buildingProvider.selectedBuildingId,
+      properties: {
+        'created': DateTime.now().toIso8601String(),
+      },
     );
+    
+    roadSystemProvider.addLandmark(landmark, buildingProvider.selectedFloorId);
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Landmark "$name" added successfully')),
+    );
+  }
 
-    if (buildingProvider.isIndoorMode) {
-      // Add to specific floor
-      final selectedBuilding = buildingProvider.getSelectedBuilding(currentSystem);
-      final selectedFloor = buildingProvider.getSelectedFloor(currentSystem);
-      
-      if (selectedBuilding != null && selectedFloor != null) {
-        final updatedLandmarks = List<Landmark>.from(selectedFloor.landmarks)..add(newLandmark);
-        final updatedFloor = selectedFloor.copyWith(landmarks: updatedLandmarks, buildingId: '');
-        
-        final updatedFloors = selectedBuilding.floors
-            .map((f) => f.id == selectedFloor.id ? updatedFloor : f)
-            .toList();
-        final updatedBuilding = selectedBuilding.copyWith(floors: updatedFloors);
-        
-        final updatedBuildings = currentSystem.buildings
-            .map((b) => b.id == selectedBuilding.id ? updatedBuilding : b)
-            .toList();
-        final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
-        
-        roadSystemProvider.updateCurrentSystem(updatedSystem);
-        
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Landmark "$name" added to ${selectedFloor.name}'),
-            backgroundColor: Colors.green,
+  void _addBuildingAtPoint(LatLng point, RoadSystemProvider roadSystemProvider) {
+    _showAddBuildingDialog(point, roadSystemProvider);
+  }
+
+  void _showAddBuildingDialog(LatLng point, RoadSystemProvider roadSystemProvider) {
+    final nameController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Building'),
+        content: TextField(
+          controller: nameController,
+          decoration: const InputDecoration(
+            labelText: 'Building Name',
+            hintText: 'Enter building name',
           ),
-        );
-      }
-    } else {
-      // Add to ground floor of nearest building or create new building
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please select a building and floor to add landmarks'),
-          backgroundColor: Colors.orange,
         ),
-      );
-    }
-
-    setState(() => _isAddingLandmark = false);
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _saveBuilding(point, nameController.text.trim(), roadSystemProvider);
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _saveBuilding(LatLng point, String name, RoadSystemProvider roadSystemProvider) {
-    final currentSystem = roadSystemProvider.currentSystem;
-    if (currentSystem == null) return;
-
-    final newBuilding = Building(
-      id: const Uuid().v4(),
-      name: name,
-      centerPosition: point,
-      floors: [
-        Floor(
-          id: const Uuid().v4(),
-          name: 'Ground Floor',
-          level: 0,
-          buildingId: '', // Will be set after building creation
-        ),
-      ],
-    );
-
-    // Update floor building IDs
-    final updatedFloors = newBuilding.floors.map((floor) => 
-        floor.copyWith(buildingId: newBuilding.id)).toList();
-    final finalBuilding = newBuilding.copyWith(floors: updatedFloors);
-
-    final updatedBuildings = List<Building>.from(currentSystem.buildings)..add(finalBuilding);
-    final updatedSystem = currentSystem.copyWith(buildings: updatedBuildings);
+    if (name.isEmpty) name = 'Building ${DateTime.now().millisecondsSinceEpoch}';
     
-    roadSystemProvider.updateCurrentSystem(updatedSystem);
+    final buildingId = const Uuid().v4();
+    final floorId = const Uuid().v4();
+    
+    // Create ground floor
+    final groundFloor = Floor(
+      id: floorId,
+      name: 'Ground Floor',
+      level: 0,
+      buildingId: buildingId,
+      roads: [],
+      landmarks: [],
+      connectedFloors: [],
+      centerPosition: point,
+      properties: {},
+    );
+    
+    // Create building
+    final building = Building(
+      id: buildingId,
+      name: name,
+      floors: [groundFloor],
+      centerPosition: point,
+      boundaryPoints: _generateDefaultBuildingBoundary(point),
+      entranceFloorIds: [floorId],
+      defaultFloorLevel: 0,
+      properties: {
+        'created': DateTime.now().toIso8601String(),
+      },
+    );
+    
+    roadSystemProvider.addBuilding(building);
     
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Building "$name" added'),
-        backgroundColor: Colors.green,
-      ),
+      SnackBar(content: Text('Building "$name" added successfully')),
     );
-
-    setState(() => _isAddingBuilding = false);
   }
+
+  // Public methods for external control
+  void startRecordingRoad() {
+    final locationProvider = Provider.of<LocationProvider>(context, listen: false);
+    if (locationProvider.currentLatLng != null) {
+      _startRecordingRoad(locationProvider.currentLatLng!);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('GPS location not available')),
+      );
+    }
+  }
+
+  void stopRecordingRoad() {
+    if (_isRecordingRoad) {
+      _stopRecordingRoad();
+    }
+  }
+
+  void toggleAddingLandmark() {
+    setState(() {
+      _isAddingLandmark = !_isAddingLandmark;
+      _isAddingBuilding = false;
+    });
+  }
+
+  void toggleAddingBuilding() {
+    setState(() {
+      _isAddingBuilding = !_isAddingBuilding;
+      _isAddingLandmark = false;
+    });
+  }
+
+  bool get isRecordingRoad => _isRecordingRoad;
+  bool get isAddingLandmark => _isAddingLandmark;
+  bool get isAddingBuilding => _isAddingBuilding;
 }

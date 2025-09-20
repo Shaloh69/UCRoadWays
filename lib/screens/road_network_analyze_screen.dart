@@ -1,20 +1,19 @@
 import 'package:flutter/material.dart';
-import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
-import 'dart:math';
+import 'dart:math' as math;
+import '../models/models.dart';
 import '../providers/road_system_provider.dart';
 import '../providers/building_provider.dart';
-import '../models/models.dart';
 
-class RoadNetworkAnalyzerScreen extends StatefulWidget {
-  const RoadNetworkAnalyzerScreen({super.key});
+class RoadNetworkAnalyzeScreen extends StatefulWidget {
+  const RoadNetworkAnalyzeScreen({super.key});
 
   @override
-  State<RoadNetworkAnalyzerScreen> createState() => _RoadNetworkAnalyzerScreenState();
+  State<RoadNetworkAnalyzeScreen> createState() => _RoadNetworkAnalyzeScreenState();
 }
 
-class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
-    with SingleTickerProviderStateMixin {
+class _RoadNetworkAnalyzeScreenState extends State<RoadNetworkAnalyzeScreen>
+    with TickerProviderStateMixin {
   late TabController _tabController;
   Map<String, dynamic> _analysisResults = {};
   bool _isAnalyzing = false;
@@ -24,7 +23,7 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _runAnalysis();
+      _performAnalysis();
     });
   }
 
@@ -34,47 +33,72 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
     super.dispose();
   }
 
+  Future<void> _performAnalysis() async {
+    final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
+    final currentSystem = roadSystemProvider.currentSystem;
+
+    if (currentSystem == null) return;
+
+    setState(() {
+      _isAnalyzing = true;
+    });
+
+    try {
+      // Simulate analysis delay for better UX
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      final results = {
+        'stats': _analyzeStats(currentSystem),
+        'connectivity': _analyzeConnectivity(currentSystem),
+        'performance': _analyzePerformance(currentSystem),
+        'issues': _identifyIssues(currentSystem),
+      };
+
+      if (mounted) {
+        setState(() {
+          _analysisResults = results;
+          _isAnalyzing = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Analysis error: $e');
+      if (mounted) {
+        setState(() {
+          _isAnalyzing = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Network Analyzer'),
+        title: const Text('Network Analysis'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _performAnalysis,
+          ),
+        ],
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
           tabs: const [
-            Tab(text: 'Overview', icon: Icon(Icons.dashboard)),
-            Tab(text: 'Connectivity', icon: Icon(Icons.account_tree)),
-            Tab(text: 'Performance', icon: Icon(Icons.speed)),
-            Tab(text: 'Issues', icon: Icon(Icons.warning)),
+            Tab(icon: Icon(Icons.analytics), text: 'Overview'),
+            Tab(icon: Icon(Icons.connect_without_contact), text: 'Connectivity'),
+            Tab(icon: Icon(Icons.speed), text: 'Performance'),
+            Tab(icon: Icon(Icons.warning), text: 'Issues'),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _runAnalysis,
-            tooltip: 'Refresh Analysis',
-          ),
-        ],
       ),
-      body: Consumer2<RoadSystemProvider, BuildingProvider>(
-        builder: (context, roadSystemProvider, buildingProvider, child) {
-          final currentSystem = roadSystemProvider.currentSystem;
-          
+      body: Consumer<RoadSystemProvider>(
+        builder: (context, provider, child) {
+          final currentSystem = provider.currentSystem;
+
           if (currentSystem == null) {
             return const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.warning, size: 64, color: Colors.orange),
-                  SizedBox(height: 16),
-                  Text(
-                    'No Road System Selected',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  Text('Please select a road system first'),
-                ],
-              ),
+              child: Text('No road system selected'),
             );
           }
 
@@ -94,7 +118,7 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
           return TabBarView(
             controller: _tabController,
             children: [
-              _buildOverviewTab(currentSystem, roadSystemProvider),
+              _buildOverviewTab(currentSystem, provider),
               _buildConnectivityTab(currentSystem),
               _buildPerformanceTab(currentSystem),
               _buildIssuesTab(currentSystem),
@@ -105,84 +129,57 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
     );
   }
 
-  Future<void> _runAnalysis() async {
-    setState(() {
-      _isAnalyzing = true;
-    });
-
-    final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
-    final currentSystem = roadSystemProvider.currentSystem;
-    
-    if (currentSystem != null) {
-      await Future.delayed(const Duration(seconds: 1)); // Simulate analysis time
-      _analysisResults = await _analyzeRoadNetwork(currentSystem);
-    }
-
-    setState(() {
-      _isAnalyzing = false;
-    });
-  }
-
-  Future<Map<String, dynamic>> _analyzeRoadNetwork(RoadSystem system) async {
-    final analysis = <String, dynamic>{};
-    
-    // Basic statistics
-    analysis['stats'] = _calculateBasicStats(system);
-    
-    // Connectivity analysis
-    analysis['connectivity'] = _analyzeConnectivity(system);
-    
-    // Performance metrics
-    analysis['performance'] = _analyzePerformance(system);
-    
-    // Issues and recommendations
-    analysis['issues'] = _identifyIssues(system);
-    
-    return analysis;
-  }
-
-  Map<String, dynamic> _calculateBasicStats(RoadSystem system) {
+  Map<String, dynamic> _analyzeStats(RoadSystem system) {
     final allRoads = system.allRoads;
     final allLandmarks = system.allLandmarks;
+    final allFloors = system.allFloors;
     
     double totalLength = 0.0;
     for (final road in allRoads) {
       totalLength += _calculateRoadLength(road);
     }
-    
-    final indoorRoads = allRoads.where((r) => r.isIndoor).length;
-    final outdoorRoads = allRoads.where((r) => r.isOutdoor).length;
-    
-    final indoorLandmarks = allLandmarks.where((l) => l.isIndoor).length;
-    final outdoorLandmarks = allLandmarks.where((l) => l.isOutdoor).length;
-    
+
+    // Calculate landmark distribution by type
+    final landmarkTypes = <String, int>{};
+    for (final landmark in allLandmarks) {
+      landmarkTypes[landmark.type] = (landmarkTypes[landmark.type] ?? 0) + 1;
+    }
+
+    // Calculate building size distribution
+    final buildingSizes = <String, int>{};
+    for (final building in system.buildings) {
+      if (building.floors.length == 1) buildingSizes['small'] = (buildingSizes['small'] ?? 0) + 1;
+      else if (building.floors.length <= 3) buildingSizes['medium'] = (buildingSizes['medium'] ?? 0) + 1;
+      else buildingSizes['large'] = (buildingSizes['large'] ?? 0) + 1;
+    }
+
     return {
-      'totalRoads': allRoads.length,
-      'indoorRoads': indoorRoads,
-      'outdoorRoads': outdoorRoads,
-      'totalLandmarks': allLandmarks.length,
-      'indoorLandmarks': indoorLandmarks,
-      'outdoorLandmarks': outdoorLandmarks,
-      'totalLength': totalLength,
+      'totalRoadLength': totalLength,
       'averageRoadLength': allRoads.isNotEmpty ? totalLength / allRoads.length : 0.0,
       'buildings': system.buildings.length,
-      'floors': system.allFloors.length,
+      'floors': allFloors.length,
+      'roads': allRoads.length,
+      'landmarks': allLandmarks.length,
+      'landmarkTypes': landmarkTypes,
+      'buildingSizes': buildingSizes,
+      'outdoorRoads': system.outdoorRoads.length,
+      'indoorRoads': allRoads.length - system.outdoorRoads.length,
     };
   }
 
   Map<String, dynamic> _analyzeConnectivity(RoadSystem system) {
     final connectivity = <String, dynamic>{};
     
-    // Building connectivity
+    // Building connectivity analysis
     connectivity['buildingConnectivity'] = _analyzeBuildingConnectivity(system);
     
-    // Floor connectivity
+    // Floor connectivity analysis  
     connectivity['floorConnectivity'] = _analyzeFloorConnectivity(system);
     
-    // Landmark accessibility
+    // Landmark accessibility analysis
     connectivity['landmarkAccessibility'] = _analyzeLandmarkAccessibility(system);
     
-    // Network density
+    // Network density calculation
     connectivity['networkDensity'] = _calculateNetworkDensity(system);
     
     return connectivity;
@@ -214,6 +211,423 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
     
     return issues;
   }
+
+  // FIXED IMPLEMENTATION METHODS
+  
+  double _calculateAveragePathLength(RoadSystem system) {
+    final allRoads = system.allRoads;
+    if (allRoads.isEmpty) return 0.0;
+    
+    double totalLength = 0.0;
+    int pathCount = 0;
+    
+    for (final road in allRoads) {
+      for (int i = 0; i < road.points.length - 1; i++) {
+        totalLength += _calculateDistance(road.points[i], road.points[i + 1]);
+        pathCount++;
+      }
+    }
+    
+    return pathCount > 0 ? totalLength / pathCount : 0.0;
+  }
+
+  double _calculateNavigationEfficiency(RoadSystem system) {
+    // Calculate based on direct path vs available path ratios
+    final landmarks = system.allLandmarks;
+    if (landmarks.length < 2) return 1.0;
+    
+    double totalEfficiency = 0.0;
+    int pairCount = 0;
+    
+    for (int i = 0; i < landmarks.length; i++) {
+      for (int j = i + 1; j < landmarks.length && pairCount < 10; j++) {
+        final directDistance = _calculateDistance(landmarks[i].position, landmarks[j].position);
+        final pathDistance = _estimatePathDistance(landmarks[i], landmarks[j], system);
+        
+        if (pathDistance > 0) {
+          totalEfficiency += directDistance / pathDistance;
+          pairCount++;
+        }
+      }
+    }
+    
+    return pairCount > 0 ? (totalEfficiency / pairCount).clamp(0.0, 1.0) : 0.5;
+  }
+
+  double _calculateLandmarkCoverage(RoadSystem system) {
+    final allRoads = system.allRoads;
+    final allLandmarks = system.allLandmarks;
+    
+    if (allRoads.isEmpty || allLandmarks.isEmpty) return 0.0;
+    
+    int coveredRoadSegments = 0;
+    int totalRoadSegments = 0;
+    
+    for (final road in allRoads) {
+      for (int i = 0; i < road.points.length - 1; i++) {
+        totalRoadSegments++;
+        final segmentMidpoint = LatLng(
+          (road.points[i].latitude + road.points[i + 1].latitude) / 2,
+          (road.points[i].longitude + road.points[i + 1].longitude) / 2,
+        );
+        
+        // Check if any landmark is within 50 meters of this segment
+        final isNearLandmark = allLandmarks.any((landmark) =>
+            _calculateDistance(landmark.position, segmentMidpoint) <= 50);
+        
+        if (isNearLandmark) coveredRoadSegments++;
+      }
+    }
+    
+    return totalRoadSegments > 0 ? coveredRoadSegments / totalRoadSegments : 0.0;
+  }
+
+  double _calculateAccessibilityScore(RoadSystem system) {
+    if (system.buildings.isEmpty) return 1.0;
+    
+    double totalScore = 0.0;
+    
+    for (final building in system.buildings) {
+      double buildingScore = 0.0;
+      
+      // Check for elevator
+      final hasElevator = building.floors.any((f) => 
+          f.landmarks.any((l) => l.type == 'elevator'));
+      if (hasElevator || building.floors.length == 1) buildingScore += 0.4;
+      
+      // Check for accessible entrance
+      final hasAccessibleEntrance = building.floors.any((f) => 
+          f.landmarks.any((l) => l.type == 'entrance' && (l.properties['accessible'] == true)));
+      if (hasAccessibleEntrance) buildingScore += 0.3;
+      
+      // Check for accessibility features
+      final hasAccessibilityLandmarks = building.floors.any((f) => 
+          f.landmarks.any((l) => ['ramp', 'accessible_restroom', 'accessible_parking'].contains(l.type)));
+      if (hasAccessibilityLandmarks) buildingScore += 0.3;
+      
+      totalScore += buildingScore;
+    }
+    
+    return totalScore / system.buildings.length;
+  }
+
+  List<Map<String, dynamic>> _findDeadEndRoads(RoadSystem system) {
+    final issues = <Map<String, dynamic>>[];
+    final allRoads = system.allRoads;
+    
+    for (final road in allRoads) {
+      if (road.connectedIntersections.isEmpty) {
+        issues.add({
+          'type': 'dead_end_road',
+          'severity': 'medium',
+          'description': 'Road "${road.name}" is not connected to any intersections',
+          'road': road,
+        });
+      }
+    }
+    
+    return issues;
+  }
+
+  List<Map<String, dynamic>> _findIsolatedLandmarks(RoadSystem system) {
+    final issues = <Map<String, dynamic>>[];
+    final allLandmarks = system.allLandmarks;
+    final allRoads = system.allRoads;
+    
+    for (final landmark in allLandmarks) {
+      // Check if landmark is near any road (within 30 meters)
+      final isNearRoad = allRoads.any((road) =>
+          road.points.any((point) => 
+              _calculateDistance(landmark.position, point) <= 30));
+      
+      if (!isNearRoad) {
+        issues.add({
+          'type': 'isolated_landmark',
+          'severity': 'low',
+          'description': 'Landmark "${landmark.name}" is not connected to road network',
+          'landmark': landmark,
+        });
+      }
+    }
+    
+    return issues;
+  }
+
+  List<Map<String, dynamic>> _findMissingVerticalCirculation(RoadSystem system) {
+    final issues = <Map<String, dynamic>>[];
+    
+    for (final building in system.buildings) {
+      if (building.floors.length > 1) {
+        final hasVerticalCirculation = building.floors.any((f) => 
+            f.landmarks.any((l) => ['elevator', 'stairs', 'escalator'].contains(l.type)));
+        
+        if (!hasVerticalCirculation) {
+          issues.add({
+            'type': 'missing_vertical_circulation',
+            'severity': 'high',
+            'description': 'Building "${building.name}" lacks vertical circulation between floors',
+            'building': building,
+          });
+        }
+      }
+    }
+    
+    return issues;
+  }
+
+  List<Map<String, dynamic>> _findAccessibilityIssues(RoadSystem system) {
+    final issues = <Map<String, dynamic>>[];
+    
+    for (final building in system.buildings) {
+      if (building.floors.length > 1) {
+        final hasElevator = building.floors.any((f) => 
+            f.landmarks.any((l) => l.type == 'elevator'));
+        
+        if (!hasElevator) {
+          issues.add({
+            'type': 'accessibility_issue',
+            'severity': 'medium',
+            'description': 'Multi-floor building "${building.name}" needs elevator for accessibility',
+            'building': building,
+          });
+        }
+      }
+      
+      // Check for accessible entrances
+      final hasAccessibleEntrance = building.floors.any((f) => 
+          f.landmarks.any((l) => l.type == 'entrance' && (l.properties['accessible'] == true)));
+      
+      if (!hasAccessibleEntrance) {
+        issues.add({
+          'type': 'missing_accessible_entrance',
+          'severity': 'medium',
+          'description': 'Building "${building.name}" lacks marked accessible entrance',
+          'building': building,
+        });
+      }
+    }
+    
+    return issues;
+  }
+
+  // CONNECTIVITY ANALYSIS IMPLEMENTATIONS
+
+  Map<String, dynamic> _analyzeBuildingConnectivity(RoadSystem system) {
+    final connectivity = <String, dynamic>{};
+    final buildings = system.buildings;
+    
+    int connectedBuildings = 0;
+    int totalConnections = 0;
+    
+    for (final building in buildings) {
+      final nearbyRoads = system.outdoorRoads.where((road) =>
+          road.points.any((point) => 
+              _calculateDistance(point, building.centerPosition) <= 100)).toList();
+      
+      if (nearbyRoads.isNotEmpty) {
+        connectedBuildings++;
+        totalConnections += nearbyRoads.length;
+      }
+    }
+    
+    connectivity['connectedBuildings'] = connectedBuildings;
+    connectivity['totalBuildings'] = buildings.length;
+    connectivity['connectionRatio'] = buildings.isNotEmpty ? connectedBuildings / buildings.length : 0.0;
+    connectivity['averageConnections'] = connectedBuildings > 0 ? totalConnections / connectedBuildings : 0.0;
+    
+    return connectivity;
+  }
+
+  Map<String, dynamic> _analyzeFloorConnectivity(RoadSystem system) {
+    final connectivity = <String, dynamic>{};
+    
+    int connectedFloors = 0;
+    int totalFloors = 0;
+    final isolatedFloors = <Floor>[];
+    
+    for (final building in system.buildings) {
+      for (final floor in building.floors) {
+        totalFloors++;
+        
+        // Check if floor has vertical circulation landmarks
+        final hasVerticalCirculation = floor.landmarks.any((l) => 
+            ['elevator', 'stairs', 'escalator'].contains(l.type));
+        
+        // Check if floor is connected via connectedFloors property
+        final hasFloorConnections = floor.connectedFloors.isNotEmpty;
+        
+        if (hasVerticalCirculation || hasFloorConnections || floor.level == 0) {
+          connectedFloors++;
+        } else {
+          isolatedFloors.add(floor);
+        }
+      }
+    }
+    
+    connectivity['connectedFloors'] = connectedFloors;
+    connectivity['totalFloors'] = totalFloors;
+    connectivity['isolatedFloors'] = isolatedFloors;
+    connectivity['connectivityRatio'] = totalFloors > 0 ? connectedFloors / totalFloors : 1.0;
+    
+    return connectivity;
+  }
+
+  Map<String, dynamic> _analyzeLandmarkAccessibility(RoadSystem system) {
+    final accessibility = <String, dynamic>{};
+    final allLandmarks = system.allLandmarks;
+    
+    int accessibleLandmarks = 0;
+    final accessibilityByType = <String, Map<String, int>>{};
+    
+    for (final landmark in allLandmarks) {
+      final type = landmark.type;
+      accessibilityByType[type] ??= {'total': 0, 'accessible': 0};
+      accessibilityByType[type]!['total'] = accessibilityByType[type]!['total']! + 1;
+      
+      // Consider landmark accessible if:
+      // 1. It's on ground floor, OR
+      // 2. Building has elevator, OR  
+      // 3. It's marked as accessible
+      final floor = _getFloorForLandmark(landmark, system);
+      final building = _getBuildingForLandmark(landmark, system);
+      
+      bool isAccessible = false;
+      
+      if (floor != null && building != null) {
+        if (floor.level == 0) {
+          isAccessible = true;
+        } else {
+          final buildingHasElevator = building.floors.any((f) => 
+              f.landmarks.any((l) => l.type == 'elevator'));
+          isAccessible = buildingHasElevator;
+        }
+      }
+      
+      if (landmark.properties['accessible'] == true) {
+        isAccessible = true;
+      }
+      
+      if (isAccessible) {
+        accessibleLandmarks++;
+        accessibilityByType[type]!['accessible'] = accessibilityByType[type]!['accessible']! + 1;
+      }
+    }
+    
+    accessibility['accessibleLandmarks'] = accessibleLandmarks;
+    accessibility['totalLandmarks'] = allLandmarks.length;
+    accessibility['accessibilityRatio'] = allLandmarks.isNotEmpty ? accessibleLandmarks / allLandmarks.length : 1.0;
+    accessibility['byType'] = accessibilityByType;
+    
+    return accessibility;
+  }
+
+  double _calculateNetworkDensity(RoadSystem system) {
+    final totalElements = system.allRoads.length + system.allLandmarks.length + system.buildings.length;
+    
+    // Calculate approximate coverage area based on building positions
+    if (system.buildings.isEmpty) return 0.0;
+    
+    double minLat = system.buildings.first.centerPosition.latitude;
+    double maxLat = system.buildings.first.centerPosition.latitude;
+    double minLng = system.buildings.first.centerPosition.longitude;
+    double maxLng = system.buildings.first.centerPosition.longitude;
+    
+    for (final building in system.buildings) {
+      final pos = building.centerPosition;
+      minLat = math.min(minLat, pos.latitude);
+      maxLat = math.max(maxLat, pos.latitude);
+      minLng = math.min(minLng, pos.longitude);
+      maxLng = math.max(maxLng, pos.longitude);
+    }
+    
+    // Calculate area in square meters (approximate)
+    final latDistance = _calculateDistance(LatLng(minLat, minLng), LatLng(maxLat, minLng));
+    final lngDistance = _calculateDistance(LatLng(minLat, minLng), LatLng(minLat, maxLng));
+    final area = latDistance * lngDistance;
+    
+    return area > 0 ? totalElements / area * 10000 : 0.0; // Elements per hectare
+  }
+
+  // HELPER METHODS
+
+  double _calculateRoadLength(Road road) {
+    if (road.points.length < 2) return 0.0;
+    
+    double length = 0.0;
+    for (int i = 0; i < road.points.length - 1; i++) {
+      length += _calculateDistance(road.points[i], road.points[i + 1]);
+    }
+    return length / 1000; // Convert to kilometers
+  }
+
+  double _calculateDistance(LatLng point1, LatLng point2) {
+    const double earthRadius = 6371000; // meters
+    final double lat1Rad = point1.latitude * math.pi / 180;
+    final double lat2Rad = point2.latitude * math.pi / 180;
+    final double deltaLatRad = (point2.latitude - point1.latitude) * math.pi / 180;
+    final double deltaLngRad = (point2.longitude - point1.longitude) * math.pi / 180;
+
+    final double a = math.sin(deltaLatRad / 2) * math.sin(deltaLatRad / 2) +
+        math.cos(lat1Rad) * math.cos(lat2Rad) * math.sin(deltaLngRad / 2) * math.sin(deltaLngRad / 2);
+    final double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+
+    return earthRadius * c;
+  }
+
+  double _estimatePathDistance(Landmark start, Landmark end, RoadSystem system) {
+    // Simple estimation based on Manhattan distance with road network
+    final directDistance = _calculateDistance(start.position, end.position);
+    return directDistance * 1.3; // Assume 30% longer path due to road network
+  }
+
+  Floor? _getFloorForLandmark(Landmark landmark, RoadSystem system) {
+    for (final building in system.buildings) {
+      for (final floor in building.floors) {
+        if (floor.landmarks.any((l) => l.id == landmark.id)) {
+          return floor;
+        }
+      }
+    }
+    return null;
+  }
+
+  Building? _getBuildingForLandmark(Landmark landmark, RoadSystem system) {
+    for (final building in system.buildings) {
+      if (building.floors.any((floor) => 
+          floor.landmarks.any((l) => l.id == landmark.id))) {
+        return building;
+      }
+    }
+    return null;
+  }
+
+  List<String> _getPerformanceRecommendations(Map<String, dynamic> performance) {
+    final recommendations = <String>[];
+    
+    if ((performance['navigationEfficiency'] ?? 0.0) < 0.7) {
+      recommendations.add('Consider adding more direct paths between key landmarks');
+    }
+    
+    if ((performance['landmarkCoverage'] ?? 0.0) < 0.6) {
+      recommendations.add('Add more landmarks to improve wayfinding coverage');
+    }
+    
+    if ((performance['accessibilityScore'] ?? 0.0) < 0.8) {
+      recommendations.add('Improve accessibility by adding elevators and accessible entrances');
+    }
+    
+    if ((performance['averagePathLength'] ?? 0.0) > 100) {
+      recommendations.add('Long path segments detected - consider adding intermediate landmarks');
+    }
+    
+    if (recommendations.isEmpty) {
+      recommendations.add('Network performance looks good! Continue maintaining current standards.');
+    }
+    
+    return recommendations;
+  }
+
+  // UI BUILDER METHODS
 
   Widget _buildOverviewTab(RoadSystem system, RoadSystemProvider provider) {
     final stats = _analysisResults['stats'] as Map<String, dynamic>? ?? {};
@@ -257,21 +671,8 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
                       const SizedBox(width: 8),
                       Expanded(
                         child: _buildStatCard(
-                          'Floors',
-                          stats['floors']?.toString() ?? '0',
-                          Icons.layers,
-                          Colors.indigo,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildStatCard(
-                          'Total Roads',
-                          stats['totalRoads']?.toString() ?? '0',
+                          'Roads',
+                          stats['roads']?.toString() ?? '0',
                           Icons.route,
                           Colors.blue,
                         ),
@@ -280,7 +681,7 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
                       Expanded(
                         child: _buildStatCard(
                           'Landmarks',
-                          stats['totalLandmarks']?.toString() ?? '0',
+                          stats['landmarks']?.toString() ?? '0',
                           Icons.place,
                           Colors.green,
                         ),
@@ -294,47 +695,7 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
           
           const SizedBox(height: 16),
           
-          // Network metrics
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.analytics, color: Colors.orange),
-                      SizedBox(width: 8),
-                      Text(
-                        'Network Metrics',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  _buildMetricRow(
-                    'Total Length',
-                    '${(stats['totalLength'] ?? 0.0).toStringAsFixed(1)} km',
-                  ),
-                  _buildMetricRow(
-                    'Average Road Length',
-                    '${(stats['averageRoadLength'] ?? 0.0).toStringAsFixed(1)} m',
-                  ),
-                  _buildMetricRow(
-                    'Indoor/Outdoor Split',
-                    '${stats['indoorRoads'] ?? 0}/${stats['outdoorRoads'] ?? 0}',
-                  ),
-                ],
-              ),
-            ),
-          ),
-          
-          const SizedBox(height: 16),
-          
-          // Quick actions
+          // Road network stats
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -342,28 +703,36 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Quick Actions',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    'Road Network',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 12),
                   Row(
                     children: [
                       Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => _exportAnalysisReport(system),
-                          icon: const Icon(Icons.file_download),
-                          label: const Text('Export Report'),
+                        child: _buildStatCard(
+                          'Total Length',
+                          '${(stats['totalRoadLength'] ?? 0.0).toStringAsFixed(2)} km',
+                          Icons.straighten,
+                          Colors.orange,
                         ),
                       ),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => _optimizeNetwork(system),
-                          icon: const Icon(Icons.tune),
-                          label: const Text('Optimize'),
+                        child: _buildStatCard(
+                          'Outdoor',
+                          stats['outdoorRoads']?.toString() ?? '0',
+                          Icons.landscape,
+                          Colors.brown,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildStatCard(
+                          'Indoor',
+                          stats['indoorRoads']?.toString() ?? '0',
+                          Icons.home,
+                          Colors.indigo,
                         ),
                       ),
                     ],
@@ -372,39 +741,11 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
               ),
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildConnectivityTab(RoadSystem system) {
-    final connectivity = _analysisResults['connectivity'] as Map<String, dynamic>? ?? {};
-    
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          // Connectivity score
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  const Text(
-                    'Overall Connectivity',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 16),
-                  _buildConnectivityScore(connectivity['networkDensity'] ?? 0.0),
-                ],
-              ),
-            ),
-          ),
           
           const SizedBox(height: 16),
           
-          // Building connectivity
-          if (system.buildings.isNotEmpty) ...[
+          // Landmark distribution
+          if ((stats['landmarkTypes'] as Map<String, int>?)?.isNotEmpty == true) ...[
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -412,17 +753,75 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Building Connectivity',
+                      'Landmark Distribution',
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 12),
-                    ...system.buildings.map((building) => _buildBuildingConnectivityItem(building)),
+                    ...(stats['landmarkTypes'] as Map<String, int>).entries.map(
+                      (entry) => Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(entry.key.replaceAll('_', ' ').toUpperCase()),
+                            Text(
+                              entry.value.toString(),
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 16),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConnectivityTab(RoadSystem system) {
+    final connectivity = _analysisResults['connectivity'] as Map<String, dynamic>? ?? {};
+    final buildingConn = connectivity['buildingConnectivity'] as Map<String, dynamic>? ?? {};
+    final floorConn = connectivity['floorConnectivity'] as Map<String, dynamic>? ?? {};
+    final landmarkAcc = connectivity['landmarkAccessibility'] as Map<String, dynamic>? ?? {};
+    
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Building connectivity
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Building Connectivity',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  LinearProgressIndicator(
+                    value: (buildingConn['connectionRatio'] ?? 0.0) as double,
+                    backgroundColor: Colors.grey[300],
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      _getScoreColor((buildingConn['connectionRatio'] ?? 0.0) as double),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${buildingConn['connectedBuildings'] ?? 0}/${buildingConn['totalBuildings'] ?? 0} buildings connected to road network',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          const SizedBox(height: 16),
           
           // Floor connectivity
           Card(
@@ -432,11 +831,85 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Floor Connectivity Analysis',
+                    'Floor Connectivity',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 12),
-                  const Text('Floors with vertical circulation issues will be highlighted.'),
+                  LinearProgressIndicator(
+                    value: (floorConn['connectivityRatio'] ?? 1.0) as double,
+                    backgroundColor: Colors.grey[300],
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      _getScoreColor((floorConn['connectivityRatio'] ?? 1.0) as double),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${floorConn['connectedFloors'] ?? 0}/${floorConn['totalFloors'] ?? 0} floors accessible',
+                  ),
+                  if ((floorConn['isolatedFloors'] as List?)?.isNotEmpty == true) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Isolated floors: ${(floorConn['isolatedFloors'] as List).length}',
+                      style: const TextStyle(color: Colors.orange),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Landmark accessibility
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Landmark Accessibility',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  LinearProgressIndicator(
+                    value: (landmarkAcc['accessibilityRatio'] ?? 1.0) as double,
+                    backgroundColor: Colors.grey[300],
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      _getScoreColor((landmarkAcc['accessibilityRatio'] ?? 1.0) as double),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${landmarkAcc['accessibleLandmarks'] ?? 0}/${landmarkAcc['totalLandmarks'] ?? 0} landmarks accessible',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Network density
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Network Density',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '${(connectivity['networkDensity'] ?? 0.0).toStringAsFixed(2)} elements/hectare',
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -452,8 +925,9 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Performance overview
+          // Performance metrics
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -465,6 +939,11 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 16),
+                  _buildPerformanceMetric(
+                    'Average Path Length',
+                    (performance['averagePathLength'] ?? 0.0) / 100, // Normalize for display
+                    'Average distance between connected points',
+                  ),
                   _buildPerformanceMetric(
                     'Navigation Efficiency',
                     performance['navigationEfficiency'] ?? 0.0,
@@ -504,7 +983,7 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Row(
                         children: [
-                          Icon(Icons.lightbulb, color: Colors.orange, size: 16),
+                          const Icon(Icons.lightbulb, color: Colors.orange, size: 16),
                           const SizedBox(width: 8),
                           Expanded(child: Text(rec)),
                         ],
@@ -609,6 +1088,7 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
       decoration: BoxDecoration(
         color: color.withOpacity(0.1),
         borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.3)),
       ),
       child: Column(
         children: [
@@ -632,97 +1112,7 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
     );
   }
 
-  Widget _buildMetricRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildConnectivityScore(double score) {
-    final percentage = (score * 100).clamp(0, 100);
-    Color color;
-    String status;
-    
-    if (percentage >= 80) {
-      color = Colors.green;
-      status = 'Excellent';
-    } else if (percentage >= 60) {
-      color = Colors.orange;
-      status = 'Good';
-    } else {
-      color = Colors.red;
-      status = 'Needs Improvement';
-    }
-    
-    return Column(
-      children: [
-        CircularProgressIndicator(
-          value: score,
-          strokeWidth: 8,
-          backgroundColor: color.withOpacity(0.2),
-          valueColor: AlwaysStoppedAnimation<Color>(color),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          '${percentage.toInt()}%',
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-        Text(status, style: TextStyle(color: color)),
-      ],
-    );
-  }
-
-  Widget _buildBuildingConnectivityItem(Building building) {
-    final floorCount = building.floors.length;
-    final hasVerticalCirculation = building.floors.any((f) => 
-        f.landmarks.any((l) => l.isVerticalCirculation));
-    
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Icon(
-            Icons.business,
-            color: hasVerticalCirculation ? Colors.green : Colors.orange,
-            size: 16,
-          ),
-          const SizedBox(width: 8),
-          Expanded(child: Text(building.name)),
-          Text('$floorCount floors'),
-          const SizedBox(width: 8),
-          Icon(
-            hasVerticalCirculation ? Icons.check_circle : Icons.warning,
-            color: hasVerticalCirculation ? Colors.green : Colors.orange,
-            size: 16,
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildPerformanceMetric(String title, double value, String description) {
-    final percentage = (value * 100).clamp(0, 100);
-    Color color;
-    
-    if (percentage >= 80) {
-      color = Colors.green;
-    } else if (percentage >= 60) {
-      color = Colors.orange;
-    } else {
-      color = Colors.red;
-    }
-    
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Column(
@@ -731,18 +1121,27 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-              Text('${percentage.toInt()}%', style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w500)),
+              Text(
+                '${(value * 100).toInt()}%',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: _getScoreColor(value),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 4),
           LinearProgressIndicator(
-            value: value,
-            backgroundColor: color.withOpacity(0.2),
-            valueColor: AlwaysStoppedAnimation<Color>(color),
+            value: value.clamp(0.0, 1.0),
+            backgroundColor: Colors.grey[300],
+            valueColor: AlwaysStoppedAnimation<Color>(_getScoreColor(value)),
           ),
           const SizedBox(height: 4),
-          Text(description, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          Text(
+            description,
+            style: const TextStyle(fontSize: 12, color: Colors.grey),
+          ),
         ],
       ),
     );
@@ -757,7 +1156,7 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
           children: [
             Row(
               children: [
-                Icon(Icons.warning, color: color),
+                Icon(Icons.priority_high, color: color, size: 20),
                 const SizedBox(width: 8),
                 Text(
                   title,
@@ -770,201 +1169,72 @@ class _RoadNetworkAnalyzerScreenState extends State<RoadNetworkAnalyzerScreen>
               ],
             ),
             const SizedBox(height: 12),
-            ...issues.map((issue) => _buildIssueItem(issue, color)),
+            ...issues.map((issue) => _buildIssueItem(issue)),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildIssueItem(Map<String, dynamic> issue, Color color) {
+  Widget _buildIssueItem(Map<String, dynamic> issue) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          Icon(Icons.error_outline, color: color, size: 16),
-          const SizedBox(width: 8),
-          Expanded(child: Text(issue['description'] ?? 'Unknown issue')),
-          TextButton(
-            onPressed: () => _fixIssue(issue),
-            child: const Text('Fix'),
-          ),
-        ],
+      child: ListTile(
+        dense: true,
+        leading: Icon(
+          _getIssueIcon(issue['type']),
+          color: _getSeverityColor(issue['severity']),
+          size: 20,
+        ),
+        title: Text(issue['description'] ?? 'Unknown issue'),
+        trailing: TextButton(
+          onPressed: () => _fixIssue(issue),
+          child: const Text('Fix'),
+        ),
       ),
     );
   }
 
-  // Analysis helper methods
-  double _calculateRoadLength(Road road) {
-    if (road.points.length < 2) return 0.0;
-    
-    double length = 0.0;
-    for (int i = 0; i < road.points.length - 1; i++) {
-      length += _calculateDistance(road.points[i], road.points[i + 1]);
+  Color _getScoreColor(double score) {
+    if (score >= 0.8) return Colors.green;
+    if (score >= 0.6) return Colors.orange;
+    return Colors.red;
+  }
+
+  Color _getSeverityColor(String severity) {
+    switch (severity) {
+      case 'high': return Colors.red;
+      case 'medium': return Colors.orange;
+      case 'low': return Colors.yellow[700]!;
+      default: return Colors.grey;
     }
-    return length / 1000; // Convert to kilometers
   }
 
-  double _calculateDistance(LatLng point1, LatLng point2) {
-    const double earthRadius = 6371000; // meters
-    final double lat1Rad = point1.latitude * pi / 180;
-    final double lat2Rad = point2.latitude * pi / 180;
-    final double deltaLatRad = (point2.latitude - point1.latitude) * pi / 180;
-    final double deltaLngRad = (point2.longitude - point1.longitude) * pi / 180;
-
-    final double a = sin(deltaLatRad / 2) * sin(deltaLatRad / 2) +
-        cos(lat1Rad) * cos(lat2Rad) * sin(deltaLngRad / 2) * sin(deltaLngRad / 2);
-    final double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-    return earthRadius * c;
-  }
-
-  Map<String, dynamic> _analyzeBuildingConnectivity(RoadSystem system) {
-    // Implementation for building connectivity analysis
-    return {};
-  }
-
-  Map<String, dynamic> _analyzeFloorConnectivity(RoadSystem system) {
-    // Implementation for floor connectivity analysis
-    return {};
-  }
-
-  Map<String, dynamic> _analyzeLandmarkAccessibility(RoadSystem system) {
-    // Implementation for landmark accessibility analysis
-    return {};
-  }
-
-  double _calculateNetworkDensity(RoadSystem system) {
-    // Simple density calculation based on roads and landmarks
-    final totalElements = system.allRoads.length + system.allLandmarks.length;
-    final maxPossibleElements = system.buildings.length * 20; // Arbitrary max
-    return maxPossibleElements > 0 ? totalElements / maxPossibleElements : 0.0;
-  }
-
-  double _calculateAveragePathLength(RoadSystem system) {
-    // Implementation for average path length calculation
-    return 0.75; // Placeholder
-  }
-
-  double _calculateNavigationEfficiency(RoadSystem system) {
-    // Implementation for navigation efficiency calculation
-    return 0.80; // Placeholder
-  }
-
-  double _calculateLandmarkCoverage(RoadSystem system) {
-    // Implementation for landmark coverage calculation
-    return 0.65; // Placeholder
-  }
-
-  double _calculateAccessibilityScore(RoadSystem system) {
-    // Implementation for accessibility score calculation
-    double score = 0.0;
-    int totalBuildings = system.buildings.length;
-    
-    if (totalBuildings == 0) return 1.0;
-    
-    for (final building in system.buildings) {
-      final hasElevator = building.floors.any((f) => 
-          f.landmarks.any((l) => l.type == 'elevator'));
-      final hasAccessibleEntrance = building.floors.any((f) => 
-          f.landmarks.any((l) => l.type == 'entrance' && l.isAccessible));
-      
-      if (hasElevator) score += 0.5;
-      if (hasAccessibleEntrance) score += 0.5;
+  IconData _getIssueIcon(String type) {
+    switch (type) {
+      case 'dead_end_road': return Icons.block;
+      case 'isolated_landmark': return Icons.location_disabled;
+      case 'missing_vertical_circulation': return Icons.elevator;
+      case 'accessibility_issue': return Icons.accessible;
+      case 'missing_accessible_entrance': return Icons.meeting_room;
+      default: return Icons.warning;
     }
-    
-    return score / totalBuildings;
-  }
-
-  List<Map<String, dynamic>> _findDeadEndRoads(RoadSystem system) {
-    // Implementation for finding dead-end roads
-    return [];
-  }
-
-  List<Map<String, dynamic>> _findIsolatedLandmarks(RoadSystem system) {
-    // Implementation for finding isolated landmarks
-    return [];
-  }
-
-  List<Map<String, dynamic>> _findMissingVerticalCirculation(RoadSystem system) {
-    final issues = <Map<String, dynamic>>[];
-    
-    for (final building in system.buildings) {
-      if (building.floors.length > 1) {
-        final hasVerticalCirculation = building.floors.any((f) => 
-            f.landmarks.any((l) => l.isVerticalCirculation));
-        
-        if (!hasVerticalCirculation) {
-          issues.add({
-            'type': 'missing_vertical_circulation',
-            'severity': 'high',
-            'description': 'Building "${building.name}" lacks vertical circulation',
-            'building': building,
-          });
-        }
-      }
-    }
-    
-    return issues;
-  }
-
-  List<Map<String, dynamic>> _findAccessibilityIssues(RoadSystem system) {
-    final issues = <Map<String, dynamic>>[];
-    
-    for (final building in system.buildings) {
-      final hasElevator = building.floors.any((f) => 
-          f.landmarks.any((l) => l.type == 'elevator'));
-      
-      if (building.floors.length > 1 && !hasElevator) {
-        issues.add({
-          'type': 'accessibility_issue',
-          'severity': 'medium',
-          'description': 'Building "${building.name}" needs elevator for accessibility',
-          'building': building,
-        });
-      }
-    }
-    
-    return issues;
-  }
-
-  List<String> _getPerformanceRecommendations(Map<String, dynamic> performance) {
-    final recommendations = <String>[];
-    
-    if ((performance['navigationEfficiency'] ?? 0.0) < 0.7) {
-      recommendations.add('Add more connecting roads between key areas');
-    }
-    
-    if ((performance['landmarkCoverage'] ?? 0.0) < 0.6) {
-      recommendations.add('Add landmarks in areas with low coverage');
-    }
-    
-    if ((performance['accessibilityScore'] ?? 0.0) < 0.8) {
-      recommendations.add('Improve accessibility with elevators and accessible entrances');
-    }
-    
-    if (recommendations.isEmpty) {
-      recommendations.add('Your network is performing well!');
-    }
-    
-    return recommendations;
-  }
-
-  void _exportAnalysisReport(RoadSystem system) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Analysis report exported')),
-    );
-  }
-
-  void _optimizeNetwork(RoadSystem system) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Network optimization suggestions generated')),
-    );
   }
 
   void _fixIssue(Map<String, dynamic> issue) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Fixing: ${issue['description']}')),
+    // TODO: Implement issue fixing functionality
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Fix Issue'),
+        content: Text('Fixing: ${issue['description']}'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
     );
   }
 }
