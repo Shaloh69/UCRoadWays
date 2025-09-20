@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:async';
+import 'dart:math' as math;
 import '../providers/location_provider.dart';
 import '../providers/road_system_provider.dart';
 import '../providers/building_provider.dart';
@@ -78,8 +79,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Future<void> _saveAppState() async {
     try {
       final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
-      // Auto-save current work
-      await roadSystemProvider.saveCurrentSystem();
+      // FIXED: Auto-save current work - use correct method name
+      await roadSystemProvider.saveRoadSystems();
       debugPrint('App state saved');
     } catch (e) {
       debugPrint('Failed to save app state: $e');
@@ -455,35 +456,26 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 mapController: _mapController,
               ),
               
-              // Floating controls
+              // FIXED: Floating controls - removed invalid parameters
               FloatingControls(
                 mapController: _mapController,
                 mapWidgetKey: _mapWidgetKey,
-                onMenuPressed: () => Scaffold.of(context).openDrawer(),
-                onOfflineMapPressed: () => _navigateToOfflineMap(),
               ),
               
-              // Floor switcher (when in indoor mode)
+              // FIXED: Floor switcher (when in indoor mode) - only mapController parameter
               if (buildingProvider.isIndoorMode && buildingProvider.getSelectedBuilding(roadSystemProvider.currentSystem) != null)
                 FloorSwitcher(
-                  building: buildingProvider.getSelectedBuilding(roadSystemProvider.currentSystem)!,
-                  selectedFloorId: buildingProvider.selectedFloorId,
-                  onFloorSelected: buildingProvider.selectFloor,
+                  mapController: _mapController,
                 ),
               
-              // Bottom panel
+              // FIXED: Bottom panel - use onToggleExpanded
               Positioned(
                 left: 0,
                 right: 0,
                 bottom: 0,
                 child: BottomPanel(
                   isExpanded: _isPanelExpanded,
-                  onToggle: () => setState(() => _isPanelExpanded = !_isPanelExpanded),
-                  content: BottomPanelContent(
-                    roadSystemProvider.currentSystem,
-                    buildingProvider,
-                    locationProvider,
-                  ),
+                  onToggleExpanded: () => setState(() => _isPanelExpanded = !_isPanelExpanded),
                 ),
               ),
               
@@ -822,6 +814,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               ),
               
               ListTile(
+                leading: const Icon(Icons.business),
+                title: const Text('Buildings'),
+                onTap: () => _navigateToBuildings(),
+              ),
+              
+              ListTile(
+                leading: const Icon(Icons.navigation),
+                title: const Text('Navigation'),
+                onTap: () => _navigateToNavigation(),
+              ),
+              
+              ListTile(
                 leading: const Icon(Icons.offline_pin),
                 title: const Text('Offline Maps'),
                 onTap: () => _navigateToOfflineMap(),
@@ -862,6 +866,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void _navigateToRoadSystems() {
     Navigator.pop(context);
     // Navigate to road systems screen
+  }
+
+  void _navigateToBuildings() {
+    Navigator.pop(context);
+    // Navigate to buildings screen
+  }
+
+  void _navigateToNavigation() {
+    Navigator.pop(context);
+    // Navigate to navigation screen
   }
 
   void _navigateToOfflineMap() {

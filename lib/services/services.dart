@@ -3,79 +3,82 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
-import 'offline_tile_service.dart';
 import 'geojson_export_service.dart';
 
 class DataStorageService {
-  static const String _roadSystemsKey = 'road_systems';
-  static const String _currentSystemKey = 'current_system_id';
-  static const String _settingsKey = 'app_settings';
-  static const String _offlineSettingsKey = 'offline_settings';
-  static const String _appVersionKey = 'app_version';
-  static const String _lastBackupKey = 'last_backup_date';
-  
-  // Cache for performance
   static SharedPreferences? _prefs;
+  static bool _isInitialized = false;
   static final Map<String, RoadSystem> _systemCache = {};
   static bool _cacheLoaded = false;
 
-  // Initialize SharedPreferences instance
+  // Initialize shared preferences
   static Future<void> initialize() async {
+    if (_isInitialized) return;
+    
     try {
-      _prefs ??= await SharedPreferences.getInstance();
-      await _loadSystemCache();
-      debugPrint('DataStorageService initialized');
+      _prefs = await SharedPreferences.getInstance();
+      _isInitialized = true;
+      debugPrint('DataStorageService initialized successfully');
     } catch (e) {
       debugPrint('Failed to initialize DataStorageService: $e');
       rethrow;
     }
   }
 
-  static Future<void> _loadSystemCache() async {
-    if (_cacheLoaded) return;
-    
-    try {
-      final systemIds = await _getStringList('road_system_ids') ?? [];
-      _systemCache.clear();
-      
-      for (final id in systemIds) {
-        final systemJson = await _getString('road_system_$id');
-        if (systemJson != null) {
-          final systemData = json.decode(systemJson) as Map<String, dynamic>;
-          _systemCache[id] = RoadSystem.fromJson(systemData);
-        }
-      }
-      
-      _cacheLoaded = true;
-      debugPrint('Loaded ${_systemCache.length} road systems into cache');
-    } catch (e) {
-      debugPrint('Failed to load system cache: $e');
+  // Ensure initialization before any operation
+  static Future<void> _ensureInitialized() async {
+    if (!_isInitialized) {
+      await initialize();
     }
   }
 
-  // Enhanced save road system with backup and validation
-  static Future<void> saveRoadSystem(RoadSystem roadSystem) async {
+  // Load all road systems from storage
+  static Future<List<RoadSystem>> loadRoadSystems() async {
+    await _ensureInitialized();
+    
+    if (_cacheLoaded) {
+      return _systemCache.values.toList();
+    }
+
     try {
-      await initialize();
-      
-      // Validate road system before saving
-      final validationErrors = _validateRoadSystem(roadSystem);
-      if (validationErrors.isNotEmpty) {
-        debugPrint('Road system validation failed: $validationErrors');
-        throw Exception('Invalid road system: ${validationErrors.first}');
+      final systemIds = await _getStringList('road_system_ids') ?? [];
+      final systems = <RoadSystem>[];
+
+      for (final id in systemIds) {
+        try {
+          final systemData = await _getString('road_system_$id');
+          if (systemData != null) {
+            final system = RoadSystem.fromJson(json.decode(systemData));
+            systems.add(system);
+            _systemCache[system.id] = system;
+          }
+        } catch (e) {
+          debugPrint('Failed to load road system $id: $e');
+          // Remove corrupted system ID
+          systemIds.remove(id);
+          await _setStringList('road_system_ids', systemIds);
+        }
       }
 
-      // Create backup before saving if system already exists
-      if (_systemCache.containsKey(roadSystem.id)) {
-        await _createBackup(roadSystem.id);
-      }
+      _cacheLoaded = true;
+      debugPrint('Loaded ${systems.length} road systems');
+      return systems;
+    } catch (e) {
+      debugPrint('Error loading road systems: $e');
+      return [];
+    }
+  }
 
-      // Save to storage
-      final systemJson = json.encode(roadSystem.toJson());
-      await _setString('road_system_${roadSystem.id}', systemJson);
+  // Save a road system
+  static Future<void> saveRoadSystem(RoadSystem roadSystem) async {
+    await _ensureInitialized();
+    
+    try {
+      final systemData = json.encode(roadSystem.toJson());
+      await _setString('road_system_${roadSystem.id}', systemData);
       
       // Update system IDs list
       final systemIds = await _getStringList('road_system_ids') ?? [];
@@ -87,217 +90,20 @@ class DataStorageService {
       // Update cache
       _systemCache[roadSystem.id] = roadSystem;
       
-      // Update metadata
-      await _updateSystemMetadata(roadSystem);
-      
-      debugPrint('Road system ${roadSystem.name} saved successfully');
+      debugPrint('Saved road system: ${roadSystem.name}');
     } catch (e) {
       debugPrint('Error saving road system: $e');
       rethrow;
     }
   }
 
-  static List<String> _validateRoadSystem(RoadSystem roadSystem) {
-    final errors = <String>[];
-    
-    if (roadSystem.name.trim().isEmpty) {
-      errors.add('Road system name cannot be empty');
-    }
-    
-    if (roadSystem.id.trim().isEmpty) {
-      errors.add('Road system ID cannot be empty');
-    }
-    
-    // Validate buildings
-    for (final building in roadSystem.buildings) {
-      if (building.name.trim().isEmpty) {
-        errors.add('Building name cannot be empty');
-      }
-      
-      if (building.floors.isEmpty) {
-        errors.add('Building "${building.name}" must have at least one floor');
-      }
-      
-      // Check for duplicate floor levels
-      final levels = building.floors.map((f) => f.level).toList();
-      final uniqueLevels = levels.toSet();
-      if (levels.length != uniqueLevels.length) {
-        errors.add('Building "${building.name}" has duplicate floor levels');
-      }
-    }
-    
-    // Validate roads
-    for (final road in roadSystem.allRoads) {
-      if (road.points.length < 2) {
-        errors.add('Road "${road.name}" must have at least 2 points');
-      }
-      
-      if (road.width <= 0) {
-        errors.add('Road "${road.name}" must have positive width');
-      }
-    }
-    
-    return errors;
-  }
-
-  static Future<void> _createBackup(String systemId) async {
-    try {
-      final existingSystem = _systemCache[systemId];
-      if (existingSystem != null) {
-        final backupKey = 'backup_${systemId}_${DateTime.now().millisecondsSinceEpoch}';
-        final backupJson = json.encode(existingSystem.toJson());
-        await _setString(backupKey, backupJson);
-        
-        // Keep only last 5 backups per system
-        await _cleanupOldBackups(systemId);
-      }
-    } catch (e) {
-      debugPrint('Failed to create backup for system $systemId: $e');
-    }
-  }
-
-  static Future<void> _cleanupOldBackups(String systemId) async {
-    try {
-      final allKeys = _prefs?.getKeys() ?? {};
-      final backupKeys = allKeys
-          .where((key) => key.startsWith('backup_$systemId'))
-          .toList();
-      
-      backupKeys.sort(); // Sort by timestamp (included in key)
-      
-      // Remove old backups, keep only latest 5
-      while (backupKeys.length > 5) {
-        final oldKey = backupKeys.removeAt(0);
-        await _prefs?.remove(oldKey);
-      }
-    } catch (e) {
-      debugPrint('Failed to cleanup old backups: $e');
-    }
-  }
-
-  static Future<void> _updateSystemMetadata(RoadSystem roadSystem) async {
-    try {
-      final metadata = {
-        'id': roadSystem.id,
-        'name': roadSystem.name,
-        'lastModified': DateTime.now().toIso8601String(),
-        'buildingCount': roadSystem.buildings.length,
-        'roadCount': roadSystem.allRoads.length,
-        'landmarkCount': roadSystem.allLandmarks.length,
-      };
-      
-      await _setString('metadata_${roadSystem.id}', json.encode(metadata));
-    } catch (e) {
-      debugPrint('Failed to update system metadata: $e');
-    }
-  }
-
-  // Enhanced load road systems with error recovery
-  static Future<List<RoadSystem>> loadRoadSystems() async {
-    try {
-      await initialize();
-      
-      if (_cacheLoaded && _systemCache.isNotEmpty) {
-        return _systemCache.values.toList();
-      }
-
-      final systemIds = await _getStringList('road_system_ids') ?? [];
-      final systems = <RoadSystem>[];
-      final corruptedIds = <String>[];
-      
-      for (final id in systemIds) {
-        try {
-          final systemJson = await _getString('road_system_$id');
-          if (systemJson != null) {
-            final systemData = json.decode(systemJson) as Map<String, dynamic>;
-            final system = RoadSystem.fromJson(systemData);
-            systems.add(system);
-            _systemCache[id] = system;
-          } else {
-            corruptedIds.add(id);
-          }
-        } catch (e) {
-          debugPrint('Failed to load road system $id: $e');
-          corruptedIds.add(id);
-          
-          // Try to recover from backup
-          final recovered = await _tryRecoverFromBackup(id);
-          if (recovered != null) {
-            systems.add(recovered);
-            _systemCache[id] = recovered;
-            debugPrint('Recovered system $id from backup');
-          }
-        }
-      }
-      
-      // Clean up corrupted system IDs
-      if (corruptedIds.isNotEmpty) {
-        await _cleanupCorruptedSystems(corruptedIds);
-      }
-      
-      _cacheLoaded = true;
-      debugPrint('Loaded ${systems.length} road systems');
-      return systems;
-    } catch (e) {
-      debugPrint('Error loading road systems: $e');
-      return [];
-    }
-  }
-
-  static Future<RoadSystem?> _tryRecoverFromBackup(String systemId) async {
-    try {
-      final allKeys = _prefs?.getKeys() ?? {};
-      final backupKeys = allKeys
-          .where((key) => key.startsWith('backup_$systemId'))
-          .toList();
-      
-      if (backupKeys.isEmpty) return null;
-      
-      // Try latest backup first
-      backupKeys.sort();
-      final latestBackupKey = backupKeys.last;
-      
-      final backupJson = await _getString(latestBackupKey);
-      if (backupJson != null) {
-        final systemData = json.decode(backupJson) as Map<String, dynamic>;
-        return RoadSystem.fromJson(systemData);
-      }
-    } catch (e) {
-      debugPrint('Failed to recover from backup: $e');
-    }
-    
-    return null;
-  }
-
-  static Future<void> _cleanupCorruptedSystems(List<String> corruptedIds) async {
-    try {
-      final systemIds = await _getStringList('road_system_ids') ?? [];
-      systemIds.removeWhere((id) => corruptedIds.contains(id));
-      await _setStringList('road_system_ids', systemIds);
-      
-      // Remove corrupted system data
-      for (final id in corruptedIds) {
-        await _prefs?.remove('road_system_$id');
-        await _prefs?.remove('metadata_$id');
-      }
-      
-      debugPrint('Cleaned up ${corruptedIds.length} corrupted systems');
-    } catch (e) {
-      debugPrint('Failed to cleanup corrupted systems: $e');
-    }
-  }
-
-  // Enhanced delete with confirmation and backup
+  // Delete a road system
   static Future<void> deleteRoadSystem(String systemId) async {
+    await _ensureInitialized();
+    
     try {
-      await initialize();
-      
-      // Create final backup before deletion
-      await _createBackup(systemId);
-      
       // Remove from storage
-      await _prefs?.remove('road_system_$systemId');
-      await _prefs?.remove('metadata_$systemId');
+      _prefs?.remove('road_system_$systemId');
       
       // Update system IDs list
       final systemIds = await _getStringList('road_system_ids') ?? [];
@@ -307,155 +113,42 @@ class DataStorageService {
       // Remove from cache
       _systemCache.remove(systemId);
       
-      debugPrint('Road system $systemId deleted successfully');
+      debugPrint('Deleted road system: $systemId');
     } catch (e) {
       debugPrint('Error deleting road system: $e');
       rethrow;
     }
   }
 
-  // Get road system by ID with caching
-  static Future<RoadSystem?> getRoadSystemById(String systemId) async {
+  // Get a specific road system
+  static Future<RoadSystem?> getRoadSystem(String systemId) async {
+    await _ensureInitialized();
+    
+    // Check cache first
+    if (_systemCache.containsKey(systemId)) {
+      return _systemCache[systemId];
+    }
+    
     try {
-      await initialize();
-      
-      // Check cache first
-      if (_systemCache.containsKey(systemId)) {
-        return _systemCache[systemId];
-      }
-      
-      // Load from storage
-      final systemJson = await _getString('road_system_$systemId');
-      if (systemJson != null) {
-        final systemData = json.decode(systemJson) as Map<String, dynamic>;
-        final system = RoadSystem.fromJson(systemData);
+      final systemData = await _getString('road_system_$systemId');
+      if (systemData != null) {
+        final system = RoadSystem.fromJson(json.decode(systemData));
         _systemCache[systemId] = system;
         return system;
       }
-      
-      return null;
     } catch (e) {
       debugPrint('Error getting road system $systemId: $e');
-      return null;
     }
+    
+    return null;
   }
 
-  // Current system management
-  static Future<void> saveCurrentSystemId(String? systemId) async {
-    try {
-      await initialize();
-      
-      if (systemId != null) {
-        await _setString(_currentSystemKey, systemId);
-      } else {
-        await _prefs?.remove(_currentSystemKey);
-      }
-      
-      debugPrint('Current system ID set to: $systemId');
-    } catch (e) {
-      debugPrint('Error saving current system ID: $e');
-      rethrow;
-    }
-  }
-
-  static Future<String?> getCurrentSystemId() async {
-    try {
-      await initialize();
-      return await _getString(_currentSystemKey);
-    } catch (e) {
-      debugPrint('Error loading current system ID: $e');
-      return null;
-    }
-  }
-
-  // Enhanced settings management
-  static Future<void> saveSettings(Map<String, dynamic> settings) async {
-    try {
-      await initialize();
-      final settingsJson = json.encode(settings);
-      await _setString(_settingsKey, settingsJson);
-      debugPrint('Settings saved successfully');
-    } catch (e) {
-      debugPrint('Error saving settings: $e');
-      rethrow;
-    }
-  }
-
-  static Future<Map<String, dynamic>> loadSettings() async {
-    try {
-      await initialize();
-      final settingsJson = await _getString(_settingsKey);
-      if (settingsJson != null) {
-        return json.decode(settingsJson) as Map<String, dynamic>;
-      }
-      
-      // Return default settings
-      return _getDefaultSettings();
-    } catch (e) {
-      debugPrint('Error loading settings: $e');
-      return _getDefaultSettings();
-    }
-  }
-
-  static Map<String, dynamic> _getDefaultSettings() {
-    return {
-      'theme': 'system',
-      'units': 'metric',
-      'autoSave': true,
-      'showLocationHistory': true,
-      'maxLocationHistory': 100,
-      'defaultZoom': 18.0,
-      'enableNotifications': true,
-      'enableHapticFeedback': true,
-    };
-  }
-
-  // Offline map settings
-  static Future<void> saveOfflineSettings(Map<String, dynamic> settings) async {
-    try {
-      await initialize();
-      final settingsJson = json.encode(settings);
-      await _setString(_offlineSettingsKey, settingsJson);
-      debugPrint('Offline settings saved successfully');
-    } catch (e) {
-      debugPrint('Error saving offline settings: $e');
-      rethrow;
-    }
-  }
-
-  static Future<Map<String, dynamic>> loadOfflineSettings() async {
-    try {
-      await initialize();
-      final settingsJson = await _getString(_offlineSettingsKey);
-      if (settingsJson != null) {
-        return json.decode(settingsJson) as Map<String, dynamic>;
-      }
-      
-      return _getDefaultOfflineSettings();
-    } catch (e) {
-      debugPrint('Error loading offline settings: $e');
-      return _getDefaultOfflineSettings();
-    }
-  }
-
-  static Map<String, dynamic> _getDefaultOfflineSettings() {
-    return {
-      'preferOffline': true,
-      'autoDownload': false,
-      'maxCacheSize': 500 * 1024 * 1024, // 500MB
-      'autoCleanupDays': 30,
-      'downloadOnWiFiOnly': true,
-      'defaultMinZoom': 10,
-      'defaultMaxZoom': 18,
-    };
-  }
-
-  // Enhanced export functionality
-  static Future<File> exportRoadSystemToFile(RoadSystem roadSystem) async {
+  // Export functionality
+  static Future<File> exportRoadSystemToJson(RoadSystem roadSystem) async {
     try {
       final directory = await getApplicationDocumentsDirectory();
       final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-      final fileName = '${roadSystem.name}_export_$timestamp.json';
+      final fileName = '${roadSystem.name}_$timestamp.json';
       final file = File('${directory.path}/$fileName');
       
       // Get system metadata
@@ -641,72 +334,98 @@ class DataStorageService {
       // Clear road systems
       final systemIds = await _getStringList('road_system_ids') ?? [];
       for (final id in systemIds) {
-        await _prefs?.remove('road_system_$id');
-        await _prefs?.remove('metadata_$id');
+        _prefs?.remove('road_system_$id');
+        _prefs?.remove('metadata_$id');
       }
-      
-      // Clear system list
-      await _prefs?.remove('road_system_ids');
-      await _prefs?.remove(_currentSystemKey);
+      _prefs?.remove('road_system_ids');
       
       // Clear cache
       _systemCache.clear();
       _cacheLoaded = false;
       
-      debugPrint('All data cleared successfully');
+      debugPrint('All data cleared');
     } catch (e) {
       debugPrint('Error clearing all data: $e');
       rethrow;
     }
   }
 
-  static Future<Map<String, dynamic>> getStorageStatistics() async {
-    try {
-      await initialize();
-      
-      final systemIds = await _getStringList('road_system_ids') ?? [];
-      int totalSize = 0;
-      int totalBackups = 0;
-      
-      // Calculate total storage usage
-      final allKeys = _prefs?.getKeys() ?? {};
-      for (final key in allKeys) {
-        if (key.startsWith('road_system_') || 
-            key.startsWith('metadata_') || 
-            key.startsWith('backup_')) {
-          final value = await _getString(key) ?? '';
-          totalSize += value.length;
-          
-          if (key.startsWith('backup_')) {
-            totalBackups++;
-          }
-        }
+  // Validation methods
+  static List<String> _validateRoadSystem(RoadSystem system) {
+    final errors = <String>[];
+    
+    if (system.name.trim().isEmpty) {
+      errors.add('Road system name cannot be empty');
+    }
+    
+    if (system.id.trim().isEmpty) {
+      errors.add('Road system ID cannot be empty');
+    }
+    
+    // Validate building structure
+    for (final building in system.buildings) {
+      if (building.name.trim().isEmpty) {
+        errors.add('Building name cannot be empty');
       }
       
-      return {
-        'totalSystems': systemIds.length,
-        'totalSize': totalSize,
-        'formattedSize': _formatBytes(totalSize),
-        'totalBackups': totalBackups,
-        'lastModified': await _getString('last_modified_date'),
-        'cacheLoaded': _cacheLoaded,
-        'cacheSize': _systemCache.length,
-      };
+      if (building.floors.isEmpty) {
+        errors.add('Building "${building.name}" has no floors');
+      }
+    }
+    
+    return errors;
+  }
+
+  // Settings management
+  static Future<void> saveSetting(String key, dynamic value) async {
+    await _ensureInitialized();
+    
+    try {
+      if (value is String) {
+        await _setString('setting_$key', value);
+      } else if (value is int) {
+        await _prefs?.setInt('setting_$key', value);
+      } else if (value is bool) {
+        await _prefs?.setBool('setting_$key', value);
+      } else if (value is double) {
+        await _prefs?.setDouble('setting_$key', value);
+      } else {
+        await _setString('setting_$key', json.encode(value));
+      }
     } catch (e) {
-      debugPrint('Error getting storage statistics: $e');
-      return {};
+      debugPrint('Error saving setting $key: $e');
+      rethrow;
     }
   }
 
-  static String _formatBytes(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  static Future<T?> getSetting<T>(String key, {T? defaultValue}) async {
+    await _ensureInitialized();
+    
+    try {
+      if (T == String) {
+        return _prefs?.getString('setting_$key') as T? ?? defaultValue;
+      } else if (T == int) {
+        return _prefs?.getInt('setting_$key') as T? ?? defaultValue;
+      } else if (T == bool) {
+        return _prefs?.getBool('setting_$key') as T? ?? defaultValue;
+      } else if (T == double) {
+        return _prefs?.getDouble('setting_$key') as T? ?? defaultValue;
+      } else {
+        final jsonString = _prefs?.getString('setting_$key');
+        if (jsonString != null) {
+          return json.decode(jsonString) as T;
+        }
+        return defaultValue;
+      }
+    } catch (e) {
+      debugPrint('Error getting setting $key: $e');
+      return defaultValue;
+    }
   }
 
-  // GeoJSON Export functionality (OpenLayers compatible)
-  static Future<File> exportToGeoJSON(RoadSystem roadSystem, {
+  // GeoJSON Export functionality
+  static Future<File> exportToGeoJSON(
+    RoadSystem roadSystem, {
     bool includeIndoorData = true,
     bool includeMetadata = true,
     List<String>? layerFilter,
@@ -756,7 +475,10 @@ class DataStorageService {
     buffer.writeln('<kml xmlns="http://www.opengis.net/kml/2.2">');
     buffer.writeln('  <Document>');
     buffer.writeln('    <name>${roadSystem.name}</name>');
-    buffer.writeln('    <description>${roadSystem.description}</description>');
+    
+    // FIXED: Generate description from available data instead of accessing non-existent property
+    final description = _generateSystemDescription(roadSystem);
+    buffer.writeln('    <description>$description</description>');
     
     // Road styles
     buffer.writeln('    <Style id="roadStyle">');
@@ -813,6 +535,43 @@ class DataStorageService {
     buffer.writeln('  </Document>');
     buffer.writeln('</kml>');
     return buffer.toString();
+  }
+
+  // FIXED: Helper method to generate system description from available data
+  static String _generateSystemDescription(RoadSystem roadSystem) {
+    // Check if description is stored in properties
+    if (roadSystem.properties.containsKey('description')) {
+      return roadSystem.properties['description'] as String;
+    }
+    
+    // Generate description from system statistics
+    final stats = _calculateSystemStatistics(roadSystem);
+    final List<String> descriptionParts = [];
+    
+    descriptionParts.add('Road system: ${roadSystem.name}');
+    
+    if (stats['totalBuildings'] > 0) {
+      descriptionParts.add('${stats['totalBuildings']} buildings');
+    }
+    
+    if (stats['totalFloors'] > 0) {
+      descriptionParts.add('${stats['totalFloors']} floors');
+    }
+    
+    if (stats['totalRoads'] > 0) {
+      descriptionParts.add('${stats['totalRoads']} roads');
+    }
+    
+    if (stats['totalLandmarks'] > 0) {
+      descriptionParts.add('${stats['totalLandmarks']} landmarks');
+    }
+    
+    if (stats['totalRoadLength'] > 0) {
+      final lengthKm = (stats['totalRoadLength'] as double) / 1000;
+      descriptionParts.add('${lengthKm.toStringAsFixed(1)} km total length');
+    }
+    
+    return descriptionParts.join(' • ');
   }
 
   // Helper methods for SharedPreferences operations

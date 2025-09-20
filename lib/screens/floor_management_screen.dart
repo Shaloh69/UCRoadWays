@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:uuid/uuid.dart';
-import '../providers/road_system_provider.dart';
-import '../providers/building_provider.dart';
 import '../models/models.dart';
+import '../providers/building_provider.dart';
+import '../providers/road_system_provider.dart';
 
 class FloorManagementScreen extends StatefulWidget {
   const FloorManagementScreen({super.key});
@@ -13,15 +12,21 @@ class FloorManagementScreen extends StatefulWidget {
 }
 
 class _FloorManagementScreenState extends State<FloorManagementScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late TabController _tabController;
   String _selectedBuildingId = '';
   String _searchQuery = '';
+  int _currentTab = 0;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(() {
+      setState(() {
+        _currentTab = _tabController.index;
+      });
+    });
   }
 
   @override
@@ -38,18 +43,11 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
         bottom: TabBar(
           controller: _tabController,
           tabs: const [
-            Tab(text: 'Overview', icon: Icon(Icons.dashboard)),
-            Tab(text: 'Vertical Access', icon: Icon(Icons.elevator)),
-            Tab(text: 'Accessibility', icon: Icon(Icons.accessible)),
+            Tab(icon: Icon(Icons.layers), text: 'Overview'),
+            Tab(icon: Icon(Icons.elevator), text: 'Vertical Access'),
+            Tab(icon: Icon(Icons.accessible), text: 'Accessibility'),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _showAddFloorDialog,
-            tooltip: 'Add Floor',
-          ),
-        ],
       ),
       body: Consumer2<RoadSystemProvider, BuildingProvider>(
         builder: (context, roadSystemProvider, buildingProvider, child) {
@@ -63,10 +61,10 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
                   Icon(Icons.warning, size: 64, color: Colors.orange),
                   SizedBox(height: 16),
                   Text(
-                    'No Road System Selected',
+                    'No Road System Available',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
-                  Text('Please select a road system first'),
+                  Text('Please load or create a road system first'),
                 ],
               ),
             );
@@ -74,10 +72,7 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
 
           return Column(
             children: [
-              // Building selector and search
-              _buildHeaderControls(currentSystem),
-              
-              // Tab content
+              _buildFilterSection(currentSystem),
               Expanded(
                 child: TabBarView(
                   controller: _tabController,
@@ -92,42 +87,40 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
           );
         },
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => _showAddFloorDialog(),
+        child: const Icon(Icons.add),
+      ),
     );
   }
 
-  Widget _buildHeaderControls(RoadSystem system) {
+  Widget _buildFilterSection(RoadSystem system) {
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.grey[50],
-        border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
-      ),
       child: Column(
         children: [
-          // Building selector
+          // Building filter
           Row(
             children: [
-              const Icon(Icons.business, color: Colors.purple),
-              const SizedBox(width: 8),
-              const Text(
-                'Building:',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(width: 8),
               Expanded(
-                child: DropdownButton<String>(
+                child: DropdownButtonFormField<String>(
                   value: _selectedBuildingId.isEmpty ? null : _selectedBuildingId,
-                  hint: const Text('Select a building'),
-                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Filter by Building',
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
                   items: [
                     const DropdownMenuItem<String>(
                       value: '',
                       child: Text('All Buildings'),
                     ),
-                    ...system.buildings.map((building) => DropdownMenuItem<String>(
-                      value: building.id,
-                      child: Text(building.name),
-                    )),
+                    ...system.buildings.map((building) {
+                      return DropdownMenuItem<String>(
+                        value: building.id,
+                        child: Text(building.name),
+                      );
+                    }),
                   ],
                   onChanged: (value) {
                     setState(() {
@@ -191,102 +184,46 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
 
     return ListView.builder(
       padding: const EdgeInsets.all(16),
-      itemCount: filteredBuildings.length,
+      itemCount: filteredBuildings.fold<int>(0, (sum, building) => sum + building.floors.length),
       itemBuilder: (context, index) {
-        final building = filteredBuildings[index];
-        return _buildBuildingCard(building, buildingProvider, roadSystemProvider);
+        int currentIndex = 0;
+        
+        for (final building in filteredBuildings) {
+          if (index < currentIndex + building.floors.length) {
+            final floorIndex = index - currentIndex;
+            final floor = building.floors[floorIndex];
+            return _buildFloorCard(floor, building, buildingProvider, roadSystemProvider, system);
+          }
+          currentIndex += building.floors.length;
+        }
+        
+        return const SizedBox.shrink();
       },
     );
   }
 
-  Widget _buildBuildingCard(
+  Widget _buildFloorCard(
+    Floor floor,
     Building building,
     BuildingProvider buildingProvider,
     RoadSystemProvider roadSystemProvider,
+    RoadSystem system,
   ) {
-    final sortedFloors = building.sortedFloors;
-    final buildingStats = buildingProvider.getBuildingStatistics(building);
+    final isSelected = buildingProvider.selectedFloorId == floor.id &&
+                     buildingProvider.selectedBuildingId == building.id;
     
-    return Card(
-      margin: const EdgeInsets.only(bottom: 16),
-      child: ExpansionTile(
-        leading: Icon(Icons.business, color: Colors.purple),
-        title: Text(
-          building.name,
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        subtitle: Text(
-          '${building.floors.length} floors • ${buildingStats['totalLandmarks']} landmarks',
-        ),
-        children: [
-          // Building stats summary
-          Container(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                _buildStatChip('Floors', building.floors.length.toString(), Icons.layers, Colors.blue),
-                _buildStatChip('Roads', buildingStats['totalRoads'].toString(), Icons.route, Colors.green),
-                _buildStatChip('Landmarks', buildingStats['totalLandmarks'].toString(), Icons.place, Colors.orange),
-              ],
-            ),
-          ),
-          
-          // Floor list
-          ...sortedFloors.map((floor) => _buildFloorListTile(
-            floor,
-            building,
-            buildingProvider,
-            roadSystemProvider,
-          )),
-          
-          // Add floor button
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => _showAddFloorDialog(building),
-                icon: const Icon(Icons.add),
-                label: const Text('Add Floor'),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+    // Calculate floor statistics
+    final floorStats = {
+      'landmarks': floor.landmarks.length,
+      'roads': floor.roads.length,
+      'verticalCirculation': floor.landmarks.where((l) => l.isVerticalCirculation).length,
+    };
 
-  Widget _buildStatChip(String label, String value, IconData icon, Color color) {
-    return Expanded(
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(height: 4),
-            Text(
-              value,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: color,
-                fontSize: 16,
-              ),
-            ),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: color,
-              ),
-            ),
-          ],
-        ),
-      ),
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      elevation: isSelected ? 4 : 1,
+      color: isSelected ? Colors.purple.shade50 : null,
+      child: _buildFloorListTile(floor, building, buildingProvider, roadSystemProvider, system, floorStats, isSelected),
     );
   }
 
@@ -295,20 +232,16 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
     Building building,
     BuildingProvider buildingProvider,
     RoadSystemProvider roadSystemProvider,
+    RoadSystem system,
+    Map<String, int> floorStats,
+    bool isSelected,
   ) {
-    final floorStats = buildingProvider.getFloorStatistics(floor);
-    final isSelected = buildingProvider.selectedFloorId == floor.id;
-    
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor: isSelected ? Colors.purple : _getFloorLevelColor(floor.level),
+        backgroundColor: _getFloorLevelColor(floor.level),
         child: Text(
           _getFloorLevelDisplay(floor.level),
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 12,
-          ),
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
       ),
       title: Text(
@@ -343,6 +276,7 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
           building,
           roadSystemProvider,
           buildingProvider,
+          system,
         ),
         itemBuilder: (context) => [
           const PopupMenuItem(
@@ -380,13 +314,25 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
         ],
       ),
       onTap: () {
-        buildingProvider.navigateToFloor(building.id, floor.id);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Selected ${floor.name} in ${building.name}'),
-            backgroundColor: Colors.purple,
-          ),
-        );
+        // First select the building, then navigate to the floor
+        buildingProvider.selectBuilding(building.id);
+        final success = buildingProvider.navigateToFloor(floor.id, system);
+        
+        if (success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Selected ${floor.name} in ${building.name}'),
+              backgroundColor: Colors.purple,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to navigate to ${floor.name}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       },
     );
   }
@@ -455,33 +401,20 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
                   child: Icon(
                     landmark.type == 'elevator' ? Icons.elevator : Icons.stairs,
                     color: Colors.white,
-                    size: 20,
                   ),
                 ),
                 title: Text(landmark.name),
-                subtitle: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('${building.name} - ${floor.name}'),
-                    Text('Connects ${landmark.connectedFloors.length} floors'),
-                  ],
+                subtitle: Text('${floor.name} (Level ${floor.level})'),
+                trailing: IconButton(
+                  icon: const Icon(Icons.info_outline),
+                  onPressed: () => _showConnectionDetails(building, floor, landmark),
                 ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      '${landmark.connectedFloors.length}',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blue,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    const Icon(Icons.arrow_forward_ios, size: 16),
-                  ],
-                ),
-                onTap: () => _showConnectionDetails(building, floor, landmark),
+                onTap: () {
+                  // Navigate to the floor with this landmark
+                  buildingProvider.selectBuilding(building.id);
+                  buildingProvider.navigateToFloor(floor.id, system);
+                  Navigator.pop(context);
+                },
               );
             }).toList(),
           ),
@@ -491,91 +424,49 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
   }
 
   Widget _buildAccessibilityTab(RoadSystem system, BuildingProvider buildingProvider) {
+    // Collect accessibility issues and features
     final accessibilityIssues = <Map<String, dynamic>>[];
     
-    // Analyze accessibility for each building
     for (final building in system.buildings) {
-      final accessibility = buildingProvider.getBuildingAccessibility(building);
-      
-      if (!accessibility['hasElevator']! && accessibility['multiFloor']!) {
+      final issues = buildingProvider.validateBuilding(building);
+      for (final issue in issues) {
         accessibilityIssues.add({
-          'type': 'no_elevator',
+          'type': 'issue',
+          'severity': issue.contains('lacks') ? 'high' : 'medium',
+          'description': issue,
           'building': building,
-          'severity': 'high',
-          'description': 'Multi-floor building without elevator access',
         });
-      }
-      
-      if (!accessibility['hasAccessibleEntrance']!) {
-        accessibilityIssues.add({
-          'type': 'no_accessible_entrance',
-          'building': building,
-          'severity': 'medium',
-          'description': 'No accessible entrance marked',
-        });
-      }
-      
-      // Check for floors without vertical circulation
-      for (final floor in building.floors) {
-        if (floor.level != 0 && floor.verticalCirculation.isEmpty) {
-          accessibilityIssues.add({
-            'type': 'isolated_floor',
-            'building': building,
-            'floor': floor,
-            'severity': 'high',
-            'description': 'Floor with no vertical circulation access',
-          });
-        }
       }
     }
 
     return Column(
       children: [
-        // Accessibility overview
+        // Summary card
         Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
           margin: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: accessibilityIssues.isEmpty ? Colors.green[50] : Colors.orange[50],
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: accessibilityIssues.isEmpty ? Colors.green : Colors.orange,
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                accessibilityIssues.isEmpty ? Icons.check_circle : Icons.warning,
-                color: accessibilityIssues.isEmpty ? Colors.green : Colors.orange,
-                size: 32,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      accessibilityIssues.isEmpty 
-                          ? 'Accessibility: Good'
-                          : 'Accessibility Issues Found',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: accessibilityIssues.isEmpty ? Colors.green[800] : Colors.orange[800],
-                      ),
-                    ),
-                    Text(
-                      accessibilityIssues.isEmpty
-                          ? 'All buildings have good accessibility features'
-                          : '${accessibilityIssues.length} issues need attention',
-                      style: TextStyle(
-                        color: accessibilityIssues.isEmpty ? Colors.green[700] : Colors.orange[700],
-                      ),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Accessibility Overview',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 8),
+                  Text('${accessibilityIssues.length} issues found'),
+                  if (accessibilityIssues.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(
+                      value: 1.0 - (accessibilityIssues.length / (system.buildings.length * 5)),
+                      backgroundColor: Colors.red.shade100,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.green),
                     ),
                   ],
-                ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
         
@@ -586,17 +477,13 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.accessible, size: 64, color: Colors.green),
+                      Icon(Icons.check_circle, size: 64, color: Colors.green),
                       SizedBox(height: 16),
                       Text(
-                        'Great Accessibility!',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green,
-                        ),
+                        'No Accessibility Issues',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
                       ),
-                      Text('All buildings have good accessibility features'),
+                      Text('All buildings meet accessibility standards'),
                     ],
                   ),
                 )
@@ -605,10 +492,11 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
                   itemCount: accessibilityIssues.length,
                   itemBuilder: (context, index) {
                     final issue = accessibilityIssues[index];
-                    final severity = issue['severity'] as String;
                     final building = issue['building'] as Building;
+                    final severity = issue['severity'] as String;
                     
                     return Card(
+                      margin: const EdgeInsets.only(bottom: 8),
                       child: ListTile(
                         leading: CircleAvatar(
                           backgroundColor: severity == 'high' ? Colors.red : Colors.orange,
@@ -669,10 +557,13 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
     Building building,
     RoadSystemProvider roadSystemProvider,
     BuildingProvider buildingProvider,
+    RoadSystem system,
   ) {
     switch (action) {
       case 'select':
-        buildingProvider.navigateToFloor(building.id, floor.id);
+        // First select the building, then navigate to the floor
+        buildingProvider.selectBuilding(building.id);
+        buildingProvider.navigateToFloor(floor.id, system);
         Navigator.pop(context);
         break;
       case 'edit':

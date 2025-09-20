@@ -23,6 +23,7 @@ class _OfflineMapScreenState extends State<OfflineMapScreen>
   LatLng? _selectionStart;
   LatLng? _selectionEnd;
   bool _isSelectingRegion = false;
+  double _selectedRadius = 2.0; // FIXED: Added missing _selectedRadius variable
   
   @override
   void initState() {
@@ -137,6 +138,17 @@ class _OfflineMapScreenState extends State<OfflineMapScreen>
                         ),
                       ],
                     ),
+                    
+                    // Download progress
+                    if (offlineProvider.isDownloading) ...[
+                      const SizedBox(height: 16),
+                      LinearProgressIndicator(value: offlineProvider.downloadProgress),
+                      const SizedBox(height: 8),
+                      Text(
+                        offlineProvider.downloadProgressText,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -144,7 +156,7 @@ class _OfflineMapScreenState extends State<OfflineMapScreen>
             
             // Custom region selection
             Card(
-              margin: const EdgeInsets.symmetric(horizontal: 16),
+              margin: const EdgeInsets.all(16),
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -155,45 +167,54 @@ class _OfflineMapScreenState extends State<OfflineMapScreen>
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 12),
-                    const Text('Select a custom area on the map'),
+                    const Text('Select a custom area to download'),
                     const SizedBox(height: 16),
+                    
                     Row(
                       children: [
                         Expanded(
                           child: ElevatedButton.icon(
-                            onPressed: !offlineProvider.isDownloading
-                                ? () => _startRegionSelection()
-                                : null,
-                            icon: Icon(_isSelectingRegion ? Icons.stop : Icons.crop_free),
+                            onPressed: () {
+                              setState(() {
+                                _isSelectingRegion = !_isSelectingRegion;
+                                if (!_isSelectingRegion) {
+                                  _selectionStart = null;
+                                  _selectionEnd = null;
+                                }
+                              });
+                            },
+                            icon: Icon(_isSelectingRegion ? Icons.cancel : Icons.crop_free),
                             label: Text(_isSelectingRegion ? 'Cancel Selection' : 'Select Region'),
                           ),
                         ),
                         const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: _selectionStart != null && _selectionEnd != null && !offlineProvider.isDownloading
-                              ? () => _downloadSelectedRegion(offlineProvider)
-                              : null,
-                          icon: const Icon(Icons.download),
-                          label: const Text('Download'),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: _selectionStart != null && _selectionEnd != null && !offlineProvider.isDownloading
+                                ? () => _downloadSelectedRegion(offlineProvider)
+                                : null,
+                            icon: const Icon(Icons.download),
+                            label: const Text('Download Selected'),
+                          ),
                         ),
                       ],
                     ),
+                    
+                    const SizedBox(height: 16),
+                    
+                    // Selection map preview
+                    Container(
+                      height: 200,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: _buildSelectionMap(locationProvider),
+                      ),
+                    ),
                   ],
-                ),
-              ),
-            ),
-            
-            // Map for region selection
-            Expanded(
-              child: Container(
-                margin: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey[300]!),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: _buildSelectionMap(locationProvider),
                 ),
               ),
             ),
@@ -281,7 +302,8 @@ class _OfflineMapScreenState extends State<OfflineMapScreen>
                     ),
                     const SizedBox(height: 12),
                     FutureBuilder<int>(
-                      future: offlineProvider.getTotalStorageSize(),
+                      // FIXED: Get storage size through the service instead of provider
+                      future: _getTotalStorageSize(),
                       builder: (context, snapshot) {
                         final size = snapshot.data ?? 0;
                         return Column(
@@ -361,100 +383,70 @@ class _OfflineMapScreenState extends State<OfflineMapScreen>
       options: MapOptions(
         initialCenter: locationProvider.currentLatLng ?? const LatLng(33.9737, -117.3281),
         initialZoom: 15.0,
-        onTap: _isSelectingRegion ? _handleMapTap : null,
+        onTap: _isSelectingRegion ? (tapPosition, point) {
+          setState(() {
+            if (_selectionStart == null) {
+              _selectionStart = point;
+            } else if (_selectionEnd == null) {
+              _selectionEnd = point;
+            } else {
+              // Reset selection
+              _selectionStart = point;
+              _selectionEnd = null;
+            }
+          });
+        } : null,
       ),
       children: [
         TileLayer(
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.ucroadways.app',
+          userAgentPackageName: 'com.ucr.roadways',
         ),
         
-        // Selection rectangle
-        if (_selectionStart != null && _selectionEnd != null)
-          PolygonLayer(
-            polygons: [
-              Polygon(
-                points: _getSelectionRectangle(),
-                color: Colors.blue.withOpacity(0.3),
-                borderColor: Colors.blue,
-                borderStrokeWidth: 2,
-              ),
-            ],
-          ),
-        
-        // Selection markers
-        if (_selectionStart != null || _selectionEnd != null)
+        // Selection overlay
+        if (_selectionStart != null) ...[
           MarkerLayer(
             markers: [
-              if (_selectionStart != null)
-                Marker(
-                  point: _selectionStart!,
-                  width: 20,
-                  height: 20,
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      color: Colors.green,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.crop_free, color: Colors.white, size: 12),
-                  ),
-                ),
+              Marker(
+                point: _selectionStart!,
+                child: const Icon(Icons.location_on, color: Colors.red, size: 30),
+              ),
               if (_selectionEnd != null)
                 Marker(
                   point: _selectionEnd!,
-                  width: 20,
-                  height: 20,
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      color: Colors.red,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.crop_free, color: Colors.white, size: 12),
-                  ),
+                  child: const Icon(Icons.location_on, color: Colors.red, size: 30),
                 ),
             ],
           ),
+          
+          // Selection rectangle
+          if (_selectionEnd != null)
+            PolygonLayer(
+              polygons: [
+                Polygon(
+                  points: _getSelectionPolygon(),
+                  color: Colors.blue.withOpacity(0.3),
+                  borderColor: Colors.blue,
+                  borderStrokeWidth: 2,
+                ),
+              ],
+            ),
+        ],
       ],
     );
   }
 
-  // State management
-  double _selectedRadius = 1.0;
-
-  void _handleMapTap(TapPosition tapPosition, LatLng point) {
-    if (!_isSelectingRegion) return;
-
-    setState(() {
-      if (_selectionStart == null) {
-        _selectionStart = point;
-      } else if (_selectionEnd == null) {
-        _selectionEnd = point;
-        _isSelectingRegion = false;
-      } else {
-        // Reset selection
-        _selectionStart = point;
-        _selectionEnd = null;
-      }
-    });
-  }
-
-  void _startRegionSelection() {
-    setState(() {
-      _isSelectingRegion = !_isSelectingRegion;
-      if (_isSelectingRegion) {
-        _selectionStart = null;
-        _selectionEnd = null;
-      }
-    });
-  }
-
-  List<LatLng> _getSelectionRectangle() {
+  List<LatLng> _getSelectionPolygon() {
     if (_selectionStart == null || _selectionEnd == null) return [];
 
-    final north = _selectionStart!.latitude > _selectionEnd!.latitude ? _selectionStart!.latitude : _selectionEnd!.latitude;
-    final south = _selectionStart!.latitude < _selectionEnd!.latitude ? _selectionStart!.latitude : _selectionEnd!.latitude;
-    final east = _selectionStart!.longitude > _selectionEnd!.longitude ? _selectionStart!.longitude : _selectionEnd!.longitude;
-    final west = _selectionStart!.longitude < _selectionEnd!.longitude ? _selectionStart!.longitude : _selectionEnd!.longitude;
+    final north = _selectionStart!.latitude > _selectionEnd!.latitude 
+        ? _selectionStart!.latitude : _selectionEnd!.latitude;
+    final south = _selectionStart!.latitude < _selectionEnd!.latitude 
+        ? _selectionStart!.latitude : _selectionEnd!.latitude;
+    final east = _selectionStart!.longitude > _selectionEnd!.longitude 
+        ? _selectionStart!.longitude : _selectionEnd!.longitude;
+    final west = _selectionStart!.longitude < _selectionEnd!.longitude 
+        ? _selectionStart!.longitude : _selectionEnd!.longitude;
 
     return [
       LatLng(north, west),
@@ -481,11 +473,12 @@ class _OfflineMapScreenState extends State<OfflineMapScreen>
     );
 
     final offlineProvider = Provider.of<OfflineMapProvider>(context, listen: false);
+    // FIXED: Use positional arguments instead of named parameters
     return offlineProvider.estimateDownloadSize(
-      northEast: northEast,
-      southWest: southWest,
-      minZoom: 10,
-      maxZoom: 18,
+      northEast,
+      southWest,
+      10,
+      18,
     );
   }
 
@@ -526,24 +519,26 @@ class _OfflineMapScreenState extends State<OfflineMapScreen>
     final regionName = 'Custom_${DateTime.now().millisecondsSinceEpoch}';
     
     // Calculate bounds
-    final north = _selectionStart!.latitude > _selectionEnd!.latitude ? _selectionStart!.latitude : _selectionEnd!.latitude;
-    final south = _selectionStart!.latitude < _selectionEnd!.latitude ? _selectionStart!.latitude : _selectionEnd!.latitude;
-    final east = _selectionStart!.longitude > _selectionEnd!.longitude ? _selectionStart!.longitude : _selectionEnd!.longitude;
-    final west = _selectionStart!.longitude < _selectionEnd!.longitude ? _selectionStart!.longitude : _selectionEnd!.longitude;
+    final north = _selectionStart!.latitude > _selectionEnd!.latitude 
+        ? _selectionStart!.latitude : _selectionEnd!.latitude;
+    final south = _selectionStart!.latitude < _selectionEnd!.latitude 
+        ? _selectionStart!.latitude : _selectionEnd!.latitude;
+    final east = _selectionStart!.longitude > _selectionEnd!.longitude 
+        ? _selectionStart!.longitude : _selectionEnd!.longitude;
+    final west = _selectionStart!.longitude < _selectionEnd!.longitude 
+        ? _selectionStart!.longitude : _selectionEnd!.longitude;
+
+    final northEast = LatLng(north, east);
+    final southWest = LatLng(south, west);
 
     try {
       await offlineProvider.downloadRegion(
-        northEast: LatLng(north, east),
-        southWest: LatLng(south, west),
+        northEast: northEast,
+        southWest: southWest,
         regionName: regionName,
         minZoom: 10,
         maxZoom: 18,
       );
-      
-      setState(() {
-        _selectionStart = null;
-        _selectionEnd = null;
-      });
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -552,6 +547,13 @@ class _OfflineMapScreenState extends State<OfflineMapScreen>
             backgroundColor: Colors.green,
           ),
         );
+        
+        // Reset selection
+        setState(() {
+          _selectionStart = null;
+          _selectionEnd = null;
+          _isSelectingRegion = false;
+        });
       }
     } catch (e) {
       if (mounted) {
@@ -569,7 +571,7 @@ class _OfflineMapScreenState extends State<OfflineMapScreen>
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Offline Map'),
+        title: const Text('Delete Region'),
         content: Text('Are you sure you want to delete "$regionName"?'),
         actions: [
           TextButton(
@@ -610,7 +612,8 @@ class _OfflineMapScreenState extends State<OfflineMapScreen>
 
   void _clearOldTiles(OfflineMapProvider offlineProvider) async {
     try {
-      await offlineProvider.clearOldTiles(30);
+      // FIXED: Use cleanupOldTiles method from provider instead of clearOldTiles
+      await offlineProvider.cleanupOldTiles(30);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -628,6 +631,17 @@ class _OfflineMapScreenState extends State<OfflineMapScreen>
           ),
         );
       }
+    }
+  }
+
+  // FIXED: Create helper method to get storage size from service
+  Future<int> _getTotalStorageSize() async {
+    try {
+      final service = OfflineTileService();
+      return await service.getTotalStorageSize();
+    } catch (e) {
+      debugPrint('Error getting storage size: $e');
+      return 0;
     }
   }
 
