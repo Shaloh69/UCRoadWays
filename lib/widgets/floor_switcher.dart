@@ -81,6 +81,7 @@ class _FloorSwitcherState extends State<FloorSwitcher>
                     Container(
                       constraints: BoxConstraints(
                         maxHeight: MediaQuery.of(context).size.height * 0.4,
+                        maxWidth: 280, // ENHANCED: Limit width for better UX
                       ),
                       child: _buildExpandedFloorList(selectedBuilding, selectedFloor, buildingProvider),
                     ),
@@ -103,69 +104,69 @@ class _FloorSwitcherState extends State<FloorSwitcher>
     Floor? selectedFloor,
     BuildingProvider buildingProvider,
   ) {
-    return GestureDetector(
-      onTap: building.floors.length > 1 ? _toggleExpanded : null,
-      child: Container(
-        width: 60,
-        height: 80,
-        decoration: BoxDecoration(
-          color: Colors.purple,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.2),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // Floor level indicator
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: Center(
-                child: Text(
-                  _getFloorLevelDisplay(selectedFloor?.level ?? 0),
-                  style: const TextStyle(
-                    color: Colors.purple,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
+    final displayText = selectedFloor != null 
+        ? _getAbbreviatedFloorName(selectedFloor.name)
+        : 'Select Floor';
+    
+    final levelDisplay = selectedFloor != null 
+        ? _getFloorLevelDisplay(selectedFloor.level)
+        : '?';
+
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(28),
+      color: Colors.purple,
+      child: InkWell(
+        onTap: _toggleExpanded,
+        borderRadius: BorderRadius.circular(28),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Floor level indicator
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Center(
+                  child: Text(
+                    levelDisplay,
+                    style: const TextStyle(
+                      color: Colors.purple,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 4),
-            
-            // Floor name (abbreviated)
-            Text(
-              _getAbbreviatedFloorName(selectedFloor?.name ?? 'Floor'),
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
+              const SizedBox(width: 8),
+              
+              // Floor name
+              Flexible( // ENHANCED: Prevent overflow
+                child: Text(
+                  displayText,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            
-            // Expansion indicator
-            if (building.floors.length > 1) ...[
-              const SizedBox(height: 2),
+              const SizedBox(width: 4),
+              
+              // Expand/collapse indicator
               Icon(
                 _isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up,
                 color: Colors.white,
                 size: 12,
               ),
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -176,6 +177,7 @@ class _FloorSwitcherState extends State<FloorSwitcher>
     Floor? selectedFloor,
     BuildingProvider buildingProvider,
   ) {
+    // FIXED: Use the correct method that now exists in BuildingProvider
     final sortedFloors = buildingProvider.getSortedFloorsForBuilding(building);
     
     return Container(
@@ -205,12 +207,15 @@ class _FloorSwitcherState extends State<FloorSwitcher>
               children: [
                 Icon(Icons.business, color: Colors.purple[700], size: 16),
                 const SizedBox(width: 6),
-                Text(
-                  building.name,
-                  style: TextStyle(
-                    color: Colors.purple[700],
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
+                Flexible( // ENHANCED: Prevent text overflow
+                  child: Text(
+                    building.name,
+                    style: TextStyle(
+                      color: Colors.purple[700],
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
@@ -220,19 +225,21 @@ class _FloorSwitcherState extends State<FloorSwitcher>
           // Floor list
           Container(
             constraints: const BoxConstraints(maxHeight: 200),
-            child: SingleChildScrollView(
-              child: Column(
-                children: sortedFloors.map((floor) {
-                  final isSelected = selectedFloor?.id == floor.id;
-                  final accessibility = _getFloorAccessibility(floor);
-                  
-                  return _buildFloorListItem(
-                    floor,
-                    isSelected,
-                    accessibility,
-                    buildingProvider,
-                  );
-                }).toList(),
+            child: Scrollbar( // ENHANCED: Add scrollbar for better UX
+              child: SingleChildScrollView(
+                child: Column(
+                  children: sortedFloors.map((floor) {
+                    final isSelected = selectedFloor?.id == floor.id;
+                    final accessibility = _getFloorAccessibility(floor);
+                    
+                    return _buildFloorListItem(
+                      floor,
+                      isSelected,
+                      accessibility,
+                      buildingProvider,
+                    );
+                  }).toList(),
+                ),
               ),
             ),
           ),
@@ -312,13 +319,15 @@ class _FloorSwitcherState extends State<FloorSwitcher>
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 12,
-                        color: isSelected ? Colors.purple[700] : Colors.black,
+                        color: isSelected ? Colors.purple : Colors.black87,
                       ),
+                      overflow: TextOverflow.ellipsis, // ENHANCED: Prevent overflow
                     ),
+                    const SizedBox(height: 2),
                     Row(
                       children: [
                         Text(
-                          '${floor.landmarks.length} landmarks',
+                          'Level ${floor.level}',
                           style: TextStyle(
                             fontSize: 10,
                             color: Colors.grey[600],
@@ -329,6 +338,9 @@ class _FloorSwitcherState extends State<FloorSwitcher>
                           Icon(Icons.elevator, size: 10, color: Colors.green[600]),
                         if (accessibility['hasStairs']!)
                           Icon(Icons.stairs, size: 10, color: Colors.blue[600]),
+                        // ENHANCED: Show accessibility indicator
+                        if (accessibility['isAccessible']!)
+                          Icon(Icons.accessible, size: 10, color: Colors.orange[600]),
                       ],
                     ),
                   ],
@@ -337,7 +349,7 @@ class _FloorSwitcherState extends State<FloorSwitcher>
               
               // Selection indicator
               if (isSelected)
-                Icon(Icons.check_circle, color: Colors.purple, size: 16),
+                const Icon(Icons.check_circle, color: Colors.purple, size: 16),
             ],
           ),
         ),
@@ -370,56 +382,104 @@ class _FloorSwitcherState extends State<FloorSwitcher>
   }
 
   String _getAbbreviatedFloorName(String name) {
-    if (name.length <= 6) return name;
-    return '${name.substring(0, 5)}...';
+    if (name.length <= 8) return name; // ENHANCED: Increased limit
+    return '${name.substring(0, 7)}...';
   }
 
   Map<String, bool> _getFloorAccessibility(Floor floor) {
     final hasElevator = floor.landmarks.any((l) => l.type == 'elevator');
     final hasStairs = floor.landmarks.any((l) => l.type == 'stairs');
+    final hasRamp = floor.landmarks.any((l) => l.type == 'ramp');
+    final hasAccessibleEntrance = floor.landmarks.any((l) => 
+        l.type == 'entrance' && l.name.toLowerCase().contains('accessible'));
     
     return {
       'hasElevator': hasElevator,
       'hasStairs': hasStairs,
-      'isAccessible': hasElevator || floor.level == 0,
+      'hasRamp': hasRamp, // ENHANCED: Check for ramps too
+      'isAccessible': hasElevator || hasRamp || floor.level == 0 || hasAccessibleEntrance,
     };
   }
 
   int _getElevatorCount(Building building) {
-    return building.floors
-        .expand((f) => f.landmarks)
-        .where((l) => l.type == 'elevator')
-        .length;
+    final elevatorLandmarks = <String>{};
+    for (final floor in building.floors) {
+      for (final landmark in floor.landmarks) {
+        if (landmark.type == 'elevator') {
+          elevatorLandmarks.add(landmark.name); // Count unique elevators
+        }
+      }
+    }
+    return elevatorLandmarks.length;
   }
 
   int _getStairCount(Building building) {
-    return building.floors
-        .expand((f) => f.landmarks)
-        .where((l) => l.type == 'stairs')
-        .length;
+    final stairLandmarks = <String>{};
+    for (final floor in building.floors) {
+      for (final landmark in floor.landmarks) {
+        if (landmark.type == 'stairs') {
+          stairLandmarks.add(landmark.name); // Count unique staircases
+        }
+      }
+    }
+    return stairLandmarks.length;
   }
 
   void _selectFloor(Floor floor, BuildingProvider buildingProvider) {
-    buildingProvider.selectFloor(floor.id);
-    _toggleExpanded(); // Collapse the list
-    
-    // Center map on floor if it has a center position
-    if (floor.centerPosition != null) {
-      widget.mapController.move(floor.centerPosition!, 21.0);
+    // ENHANCED: Better error handling
+    try {
+      buildingProvider.selectFloor(floor.id);
+      _toggleExpanded(); // Collapse the list
+      
+      // Center map on floor if it has a center position
+      if (floor.centerPosition != null) {
+        widget.mapController.move(floor.centerPosition!, 21.0);
+      }
+      
+      // ENHANCED: Better user feedback
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.layers, color: Colors.white),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Switched to ${floor.name}',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.purple,
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
+    } catch (e) {
+      // ENHANCED: Error handling
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.error, color: Colors.white),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text('Failed to switch floors'),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(16),
+          ),
+        );
+      }
     }
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(Icons.layers, color: Colors.white),
-            const SizedBox(width: 8),
-            Text('Switched to ${floor.name}'),
-          ],
-        ),
-        backgroundColor: Colors.purple,
-        duration: const Duration(seconds: 2),
-      ),
-    );
   }
 }
