@@ -44,6 +44,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   
   // App lifecycle
   bool _isAppActive = true;
+  
+  // Loading overlay
+  OverlayEntry? _loadingOverlay;
+  
+  // Initialization lock to prevent race conditions
+  bool _initializationLock = false;
 
   @override
   void initState() {
@@ -58,6 +64,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _retryTimer?.cancel();
+    _hideLoadingOverlay();
     super.dispose();
   }
 
@@ -103,8 +110,48 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
   }
 
+  void _showLoadingOverlay() {
+    _hideLoadingOverlay(); // Ensure no duplicate overlays
+    
+    _loadingOverlay = OverlayEntry(
+      builder: (context) => Container(
+        color: Colors.black54,
+        child: Center(
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text(_initializationStatus),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: 200,
+                    child: LinearProgressIndicator(value: _initializationProgress),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    
+    Overlay.of(context).insert(_loadingOverlay!);
+  }
+
+  void _hideLoadingOverlay() {
+    _loadingOverlay?.remove();
+    _loadingOverlay = null;
+  }
+
   Future<void> _initializeApp() async {
-    if (_isInitialized || _isInitializing) return;
+    // Prevent concurrent initializations
+    if (_initializationLock || _isInitialized) return;
+    
+    _initializationLock = true;
     
     setState(() {
       _isInitializing = true;
@@ -177,6 +224,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       
       _hideLoadingOverlay();
       _handleInitializationError(e);
+    } finally {
+      _initializationLock = false;
     }
   }
 
@@ -317,6 +366,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _retryCount++;
     debugPrint('Retrying initialization (attempt $_retryCount/$_maxRetries)');
     
+    // Cleanup before retry
+    _hideLoadingOverlay();
+    _retryTimer?.cancel();
+    
     // Add exponential backoff
     final delay = Duration(seconds: math.min(_retryCount * 2, 10));
     
@@ -389,99 +442,68 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _showLoadingOverlay() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => PopScope(
-        canPop: false,
-        child: Dialog(
-          backgroundColor: Colors.transparent,
-          child: Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const CircularProgressIndicator(),
-                const SizedBox(height: 16),
-                Text(
-                  _initializationStatus,
-                  style: Theme.of(context).textTheme.bodyLarge,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 12),
-                LinearProgressIndicator(value: _initializationProgress),
-                const SizedBox(height: 8),
-                Text(
-                  '${(_initializationProgress * 100).toInt()}%',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _hideLoadingOverlay() {
-    if (Navigator.canPop(context)) {
-      Navigator.pop(context);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    if (!_isInitialized && !_isInitializing) {
-      return _buildErrorState();
-    }
-    
     if (_isInitializing) {
       return _buildInitializingState();
     }
-
-    return Scaffold(
-      body: Consumer4<LocationProvider, RoadSystemProvider, BuildingProvider, OfflineMapProvider>(
-        builder: (context, locationProvider, roadSystemProvider, buildingProvider, offlineMapProvider, child) {
-          return Stack(
+    
+    if (!_isInitialized && _initializationError != null) {
+      return _buildErrorState();
+    }
+    
+    return Consumer4<LocationProvider, RoadSystemProvider, BuildingProvider, OfflineMapProvider>(
+      builder: (context, locationProvider, roadSystemProvider, buildingProvider, offlineMapProvider, child) {
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('UCRoadWays'),
+            centerTitle: true,
+            actions: [
+              // Network status indicator
+              IconButton(
+                icon: Icon(
+                  offlineMapProvider.preferOffline ? Icons.cloud_off : Icons.cloud_queue,
+                  color: offlineMapProvider.preferOffline ? Colors.orange : Colors.blue,
+                ),
+                onPressed: () => setState(() => _showNetworkStatus = !_showNetworkStatus),
+              ),
+              
+              // Settings
+              IconButton(
+                icon: const Icon(Icons.settings),
+                onPressed: () => _openAppSettings(),
+              ),
+            ],
+          ),
+          body: Stack(
             children: [
-              // Main map
+              // Main map widget
               UCRoadWaysMap(
                 key: _mapWidgetKey,
                 mapController: _mapController,
               ),
               
-              // FIXED: Floating controls with proper integration
+              // Floor switcher (if in building mode)
+              if (buildingProvider.isIndoorMode &&
+                  buildingProvider.getSelectedBuilding(roadSystemProvider.currentSystem) != null)
+                FloorSwitcher(mapController: _mapController),
+              
+              // Floating action buttons
               FloatingControls(
                 mapController: _mapController,
                 mapWidgetKey: _mapWidgetKey,
               ),
               
-              // Floor switcher (when in indoor mode)
-              if (buildingProvider.isIndoorMode && buildingProvider.getSelectedBuilding(roadSystemProvider.currentSystem) != null)
-                FloorSwitcher(
-                  mapController: _mapController,
-                ),
-              
               // Bottom panel
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: BottomPanel(
-                  isExpanded: _isPanelExpanded,
-                  onToggleExpanded: () => setState(() => _isPanelExpanded = !_isPanelExpanded),
-                ),
+              BottomPanel(
+                isExpanded: _isPanelExpanded,
+                onToggleExpanded: () => setState(() => _isPanelExpanded = !_isPanelExpanded),
               ),
               
-              // Network status indicator
+              // Network status overlay
               if (_showNetworkStatus)
                 Positioned(
-                  top: MediaQuery.of(context).padding.top + 16,
+                  top: MediaQuery.of(context).padding.top + 70,
                   left: 16,
                   right: 16,
                   child: _buildNetworkStatusIndicator(offlineMapProvider),
@@ -512,10 +534,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   child: _buildErrorBanner(),
                 ),
             ],
-          );
-        },
-      ),
-      drawer: _buildAppDrawer(),
+          ),
+          drawer: _buildAppDrawer(),
+        );
+      },
     );
   }
 
@@ -635,20 +657,31 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         child: Row(
           children: [
             Icon(
-              offlineMapProvider.preferOffline ? Icons.cloud_off : Icons.cloud,
-              size: 20,
-              color: offlineMapProvider.preferOffline ? Colors.blue : Colors.green,
+              offlineMapProvider.preferOffline ? Icons.offline_bolt : Icons.wifi,
+              color: offlineMapProvider.preferOffline ? Colors.orange : Colors.green,
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(
-                offlineMapProvider.preferOffline ? 'Offline Mode' : 'Online Mode',
-                style: const TextStyle(fontWeight: FontWeight.bold),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    offlineMapProvider.preferOffline ? 'Offline Mode' : 'Online Mode',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    offlineMapProvider.preferOffline
+                        ? 'Using cached maps'
+                        : 'Downloading maps on demand',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ],
               ),
             ),
-            IconButton(
-              icon: const Icon(Icons.close, size: 16),
-              onPressed: () => setState(() => _showNetworkStatus = false),
+            Switch(
+              value: offlineMapProvider.preferOffline,
+              onChanged: (value) => offlineMapProvider.setPreferOffline(value),
             ),
           ],
         ),
@@ -658,30 +691,39 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   Widget _buildDownloadIndicator(OfflineMapProvider offlineMapProvider) {
     return Card(
+      color: Theme.of(context).colorScheme.primaryContainer,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               children: [
-                const Icon(Icons.download, size: 20, color: Colors.blue),
-                const SizedBox(width: 8),
+                const CircularProgressIndicator(strokeWidth: 2),
+                const SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    'Downloading ${offlineMapProvider.currentRegionName}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Downloading Map Tiles',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        '${offlineMapProvider.downloadProgress.toStringAsFixed(0)}% complete',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ],
                   ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => offlineMapProvider.cancelDownload(),
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            LinearProgressIndicator(value: offlineMapProvider.downloadProgress),
-            const SizedBox(height: 4),
-            Text(
-              '${offlineMapProvider.currentTileCount}/${offlineMapProvider.totalTileCount} tiles (${(offlineMapProvider.downloadProgress * 100).toStringAsFixed(1)}%)',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+            LinearProgressIndicator(value: offlineMapProvider.downloadProgress / 100),
           ],
         ),
       ),
@@ -697,7 +739,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
                   locationProvider.isTracking ? Icons.gps_fixed : Icons.gps_off,
@@ -797,63 +838,46 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     const Spacer(),
                     if (roadSystemProvider.currentSystem != null)
                       Text(
-                        'Active: ${roadSystemProvider.currentSystem!.name}',
+                        'Current: ${roadSystemProvider.currentSystem!.name}',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onPrimary,
+                          color: Theme.of(context).colorScheme.onPrimary.withOpacity(0.9),
                         ),
                       ),
                   ],
                 ),
               ),
-              
               ListTile(
                 leading: const Icon(Icons.map),
-                title: const Text('Road Systems'),
-                onTap: () => _navigateToRoadSystems(),
-              ),
-              
-              ListTile(
-                leading: const Icon(Icons.business),
-                title: const Text('Buildings'),
-                onTap: () => _navigateToBuildings(),
-              ),
-              
-              ListTile(
-                leading: const Icon(Icons.navigation),
-                title: const Text('Navigation'),
-                onTap: () => _navigateToNavigation(),
-              ),
-              
-              ListTile(
-                leading: const Icon(Icons.offline_pin),
                 title: const Text('Offline Maps'),
-                onTap: () => _navigateToOfflineMap(),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const OfflineMapScreen()),
+                  );
+                },
               ),
-              
-              ListTile(
-                leading: const Icon(Icons.analytics),
-                title: const Text('Network Analysis'),
-                onTap: () => _navigateToAnalysis(),
-              ),
-              
-              const Divider(),
-              
-              ListTile(
-                leading: const Icon(Icons.settings),
-                title: const Text('Settings'),
-                onTap: () => _navigateToSettings(),
-              ),
-              
-              ListTile(
-                leading: const Icon(Icons.help),
-                title: const Text('Help & Tutorial'),
-                onTap: () => _navigateToHelp(),
-              ),
-              
               ListTile(
                 leading: const Icon(Icons.info),
                 title: const Text('About'),
-                onTap: () => _navigateToAbout(),
+                onTap: () {
+                  Navigator.pop(context);
+                  showAboutDialog(
+                    context: context,
+                    applicationName: 'UCRoadWays',
+                    applicationVersion: '1.0.0',
+                    applicationLegalese: '© 2024 UCRoadWays. All rights reserved.',
+                  );
+                },
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.logout, color: Colors.red),
+                title: const Text('Clear All Data', style: TextStyle(color: Colors.red)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _confirmClearData();
+                },
               ),
             ],
           );
@@ -862,46 +886,31 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _navigateToRoadSystems() {
-    Navigator.pop(context);
-    // Navigate to road systems screen
-  }
-
-  void _navigateToBuildings() {
-    Navigator.pop(context);
-    // Navigate to buildings screen
-  }
-
-  void _navigateToNavigation() {
-    Navigator.pop(context);
-    // Navigate to navigation screen
-  }
-
-  void _navigateToOfflineMap() {
-    Navigator.pop(context);
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const OfflineMapScreen()),
+  void _confirmClearData() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear All Data?'),
+        content: const Text('This will delete all road systems and reset the app. This action cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              final provider = Provider.of<RoadSystemProvider>(context, listen: false);
+              await provider.clearAllData();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('All data cleared')),
+              );
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
     );
-  }
-
-  void _navigateToAnalysis() {
-    Navigator.pop(context);
-    // Navigate to analysis screen
-  }
-
-  void _navigateToSettings() {
-    Navigator.pop(context);
-    // Navigate to settings screen
-  }
-
-  void _navigateToHelp() {
-    Navigator.pop(context);
-    // Navigate to help screen
-  }
-
-  void _navigateToAbout() {
-    Navigator.pop(context);
-    // Navigate to about screen
   }
 }

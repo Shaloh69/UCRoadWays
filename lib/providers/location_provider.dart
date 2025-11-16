@@ -22,9 +22,10 @@ class LocationProvider extends ChangeNotifier {
   final List<LatLng> _locationHistory = [];
   static const int _maxHistoryLength = 100;
 
-  // Streams
+  // Streams - FIXED: Single stream management
   StreamSubscription<Position>? _positionSubscription;
-  final StreamController<LatLng> _locationStreamController = StreamController<LatLng>.broadcast();
+  StreamController<LatLng>? _locationStreamController;
+  bool _isStreamControllerClosed = false;
 
   // Distance and movement tracking
   double _totalDistance = 0.0;
@@ -37,11 +38,13 @@ class LocationProvider extends ChangeNotifier {
   int _poorSignalCount = 0;
   bool _isLocationStale = false;
 
-  // Auto-retry mechanism
+  // Auto-retry mechanism - FIXED: Better state management
   Timer? _retryTimer;
   int _retryCount = 0;
-  static const int _maxRetries = 5;
-  static const Duration _retryInterval = Duration(seconds: 10);
+  static const int _maxRetries = 3;
+  static const Duration _retryInterval = Duration(seconds: 15);
+  bool _isRetrying = false;
+  bool _isInitializing = false;
 
   // Getters
   LatLng? get currentLatLng => _currentLatLng;
@@ -54,7 +57,10 @@ class LocationProvider extends ChangeNotifier {
   double get heading => _heading;
   DateTime? get lastUpdateTime => _lastUpdateTime;
   List<LatLng> get locationHistory => List.unmodifiable(_locationHistory);
-  Stream<LatLng> get locationStream => _locationStreamController.stream;
+  Stream<LatLng> get locationStream {
+    _ensureStreamController();
+    return _locationStreamController!.stream;
+  }
   double get totalDistance => _totalDistance;
   double get currentTrip => _currentTrip;
   bool get hasLocation => _currentLatLng != null;
@@ -63,44 +69,75 @@ class LocationProvider extends ChangeNotifier {
       ? _accuracyHistory.reduce((a, b) => a + b) / _accuracyHistory.length 
       : 0.0;
 
-  // Enhanced location settings with fallback options
+  // FIXED: More conservative location settings to prevent timeouts
   static const LocationSettings _highAccuracySettings = LocationSettings(
     accuracy: LocationAccuracy.high,
-    distanceFilter: 1, // Update every 1 meter
-    timeLimit: Duration(seconds: 15),
+    distanceFilter: 2, // Update every 2 meters
+    timeLimit: Duration(seconds: 30), // Increased timeout
   );
 
   static const LocationSettings _balancedSettings = LocationSettings(
     accuracy: LocationAccuracy.medium,
-    distanceFilter: 3, // Update every 3 meters
-    timeLimit: Duration(seconds: 10),
+    distanceFilter: 5, // Update every 5 meters
+    timeLimit: Duration(seconds: 25), // Increased timeout
   );
 
   static const LocationSettings _lowPowerSettings = LocationSettings(
     accuracy: LocationAccuracy.low,
     distanceFilter: 10, // Update every 10 meters
-    timeLimit: Duration(seconds: 8),
+    timeLimit: Duration(seconds: 20), // Increased timeout
   );
 
-  LocationSettings _currentSettings = _highAccuracySettings;
+  LocationSettings _currentSettings = _balancedSettings; // Start with balanced
+
+  // FIXED: Stream controller management
+  void _ensureStreamController() {
+    if (_locationStreamController == null || _isStreamControllerClosed) {
+      _locationStreamController = StreamController<LatLng>.broadcast();
+      _isStreamControllerClosed = false;
+    }
+  }
 
   // Initialization
   LocationProvider() {
+    _ensureStreamController();
     _initializeLocation();
     _startLocationQualityMonitoring();
   }
 
+  @override
+  void dispose() {
+    _stopLocationTracking();
+    _retryTimer?.cancel();
+    if (_locationStreamController != null && !_isStreamControllerClosed) {
+      _locationStreamController!.close();
+      _isStreamControllerClosed = true;
+    }
+    super.dispose();
+  }
+
+  // FIXED: Prevent multiple concurrent initializations
   Future<void> _initializeLocation() async {
+    if (_isInitializing) {
+      debugPrint('Location initialization already in progress');
+      return;
+    }
+
+    _isInitializing = true;
     try {
       await _checkPermissions();
       if (_hasPermission) {
         await _getCurrentLocation();
-        // Auto-start tracking if permission is granted
-        await startLocationTracking();
+        // Only auto-start if not already tracking
+        if (!_isTracking) {
+          await startLocationTracking();
+        }
       }
     } catch (e) {
       _setError('Failed to initialize location services: $e');
       _startRetryMechanism();
+    } finally {
+      _isInitializing = false;
     }
   }
 
@@ -146,7 +183,7 @@ class LocationProvider extends ChangeNotifier {
     }
   }
 
-  // Get current location with enhanced error handling
+  // FIXED: Better timeout handling and error recovery
   Future<LatLng?> getCurrentLocation() async {
     try {
       if (!_hasPermission) {
@@ -155,18 +192,18 @@ class LocationProvider extends ChangeNotifier {
       }
 
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 15),
+        desiredAccuracy: LocationAccuracy.medium, // Use medium for better reliability
+        timeLimit: const Duration(seconds: 20),
       ).timeout(
-        const Duration(seconds: 20),
+        const Duration(seconds: 25),
         onTimeout: () => throw TimeoutException('Location request timed out'),
       );
 
       _updateLocation(position);
       return _currentLatLng;
     } on TimeoutException catch (e) {
-      _setError('Location request timed out. Please check your GPS signal.');
-      return null;
+      _setError('Location request timed out. Trying with lower accuracy...');
+      return _getCurrentLocationFallback();
     } on LocationServiceDisabledException {
       _setError('Location services are disabled. Please enable GPS.');
       return null;
@@ -175,25 +212,50 @@ class LocationProvider extends ChangeNotifier {
       return null;
     } catch (e) {
       _setError('Failed to get current location: $e');
+      return _getCurrentLocationFallback();
+    }
+  }
+
+  // FIXED: Fallback location method with lower accuracy
+  Future<LatLng?> _getCurrentLocationFallback() async {
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.low,
+        timeLimit: const Duration(seconds: 15),
+      );
+      _updateLocation(position);
+      _clearError(); // Clear previous timeout error
+      return _currentLatLng;
+    } catch (e) {
+      debugPrint('Fallback location also failed: $e');
       return null;
     }
   }
 
-  // Enhanced location tracking with adaptive quality
+  // FIXED: Enhanced location tracking with proper stream management
   Future<void> startLocationTracking() async {
-    try {
-      if (_isTracking) return;
+    if (_isTracking) {
+      debugPrint('Location tracking already active');
+      return;
+    }
 
+    try {
       if (!_hasPermission) {
         final permissionGranted = await _checkPermissions();
         if (!permissionGranted) return;
       }
 
+      // FIXED: Ensure previous subscription is properly disposed
+      await _stopLocationTracking();
+
       _isTracking = true;
       _clearError();
       _tripStartTime = DateTime.now();
       _currentTrip = 0.0;
+      _ensureStreamController();
       notifyListeners();
+
+      debugPrint('Starting location tracking with ${_getSettingsName(_currentSettings)} settings');
 
       _positionSubscription = Geolocator.getPositionStream(
         locationSettings: _currentSettings,
@@ -204,10 +266,11 @@ class LocationProvider extends ChangeNotifier {
         },
         onDone: () {
           debugPrint('Location stream completed');
+          _isTracking = false;
+          notifyListeners();
         },
       );
 
-      debugPrint('Location tracking started with ${_getSettingsName(_currentSettings)} settings');
     } catch (e) {
       _setError('Failed to start location tracking: $e');
       _isTracking = false;
@@ -216,130 +279,88 @@ class LocationProvider extends ChangeNotifier {
     }
   }
 
-  void _handleLocationError(dynamic error) {
-    debugPrint('Location stream error: $error');
-    
-    if (error is LocationServiceDisabledException) {
-      _setError('GPS disabled. Please enable location services.');
-    } else if (error is PermissionDeniedException) {
-      _setError('Location permission denied.');
-      _hasPermission = false;
-    } else {
-      _setError('Location tracking error: $error');
+  // FIXED: Proper stream disposal
+  Future<void> _stopLocationTracking() async {
+    if (_positionSubscription != null) {
+      await _positionSubscription!.cancel();
+      _positionSubscription = null;
+      debugPrint('Location subscription cancelled');
     }
-    
-    // Try to recover with lower accuracy settings
-    _adaptLocationSettings();
-    _startRetryMechanism();
   }
 
-  // Stop location tracking
-  void stopLocationTracking() {
-    _stopLocationTracking();
+  Future<void> stopLocationTracking() async {
+    if (!_isTracking) return;
+
+    await _stopLocationTracking();
+    _isTracking = false;
+    _retryTimer?.cancel();
+    notifyListeners();
     debugPrint('Location tracking stopped');
   }
 
-  void _stopLocationTracking() {
-    _positionSubscription?.cancel();
-    _positionSubscription = null;
-    _isTracking = false;
-    _retryTimer?.cancel();
-    _retryTimer = null;
+  // FIXED: Better error handling with smart fallback
+  void _handleLocationError(dynamic error) {
+    debugPrint('Location stream error: $error');
+    
+    if (error is TimeoutException || error.toString().contains('timeout') || error.toString().contains('Time limit reached')) {
+      _handleTimeoutError();
+    } else if (error is LocationServiceDisabledException) {
+      _setError('GPS disabled. Please enable location services.');
+      _isTracking = false;
+    } else if (error is PermissionDeniedException) {
+      _setError('Location permission denied.');
+      _isTracking = false;
+    } else {
+      _setError('Location error: $error');
+      _fallbackToLowerAccuracy();
+    }
+    
     notifyListeners();
   }
 
-  // Enhanced location update with quality checks
-  void _updateLocation(Position position) {
-    try {
-      _currentPosition = position;
-      final newLatLng = LatLng(position.latitude, position.longitude);
-      
-      // Validate coordinates
-      if (!isValidLocation(newLatLng)) {
-        debugPrint('Invalid location coordinates received: ${newLatLng.latitude}, ${newLatLng.longitude}');
-        return;
-      }
-      
-      // Check for significant movement to avoid noise
-      if (_currentLatLng != null) {
-        final distance = _calculateDistance(_currentLatLng!, newLatLng);
-        if (distance < 1.0 && position.accuracy > 20) {
-          // Skip small movements with poor accuracy
-          return;
-        }
-      }
-
-      // Update distance tracking
-      if (_lastLocationForDistance != null) {
-        final distance = _calculateDistance(_lastLocationForDistance!, newLatLng);
-        _totalDistance += distance;
-        _currentTrip += distance;
-      }
-      _lastLocationForDistance = newLatLng;
-
-      _currentLatLng = newLatLng;
-      _accuracy = position.accuracy;
-      _speed = position.speed;
-      _heading = position.heading;
-      _lastUpdateTime = DateTime.now();
-      _isLocationStale = false;
-
-      // Update quality tracking
-      _accuracyHistory.add(position.accuracy);
-      if (_accuracyHistory.length > 10) {
-        _accuracyHistory.removeAt(0);
-      }
-
-      // Monitor signal quality
-      if (position.accuracy > 50) {
-        _poorSignalCount++;
-        if (_poorSignalCount > 5) {
-          _adaptLocationSettings();
-          _poorSignalCount = 0;
-        }
-      } else {
-        _poorSignalCount = math.max(0, _poorSignalCount - 1);
-      }
-
-      // Add to history
-      _addToHistory(newLatLng);
-
-      // Clear any errors and reset retry count
-      _clearError();
-      _retryCount = 0;
-
-      // Notify listeners
-      notifyListeners();
-      
-      // Emit to stream
-      _locationStreamController.add(newLatLng);
-      
-      debugPrint('Location updated: ${newLatLng.latitude}, ${newLatLng.longitude} (±${position.accuracy.toStringAsFixed(1)}m)');
-    } catch (e) {
-      debugPrint('Error updating location: $e');
+  // FIXED: Timeout handling with progressive fallback
+  void _handleTimeoutError() {
+    _poorSignalCount++;
+    debugPrint('Location timeout (count: $_poorSignalCount)');
+    
+    if (_poorSignalCount >= 2) {
+      _fallbackToLowerAccuracy();
+    } else {
+      _setError('GPS signal weak. Retrying...');
+      _restartLocationTracking();
     }
   }
 
-  // Adaptive location settings based on signal quality
-  void _adaptLocationSettings() {
+  // FIXED: Smart settings fallback
+  void _fallbackToLowerAccuracy() {
     if (_currentSettings == _highAccuracySettings) {
       _currentSettings = _balancedSettings;
       debugPrint('Switching to balanced location settings');
     } else if (_currentSettings == _balancedSettings) {
       _currentSettings = _lowPowerSettings;
       debugPrint('Switching to low power location settings');
+    } else {
+      // Already at lowest setting, just restart
+      debugPrint('Already at lowest settings, restarting...');
     }
     
-    // Restart tracking with new settings if currently tracking
+    // FIXED: Don't restart immediately if already tracking
     if (_isTracking) {
       _restartLocationTracking();
     }
   }
 
+  // FIXED: Prevent rapid restart loops
   void _restartLocationTracking() async {
-    _stopLocationTracking();
-    await Future.delayed(const Duration(seconds: 2));
-    await startLocationTracking();
+    if (_isRetrying) return;
+    
+    _isRetrying = true;
+    await _stopLocationTracking();
+    await Future.delayed(const Duration(seconds: 3)); // Wait before restart
+    if (_isTracking) { // Only restart if still supposed to be tracking
+      await startLocationTracking();
+    }
+    _isRetrying = false;
   }
 
   String _getSettingsName(LocationSettings settings) {
@@ -349,25 +370,30 @@ class LocationProvider extends ChangeNotifier {
     return 'Custom';
   }
 
-  // Auto-retry mechanism for failed location requests
+  // FIXED: Improved retry mechanism
   void _startRetryMechanism() {
-    if (_retryCount >= _maxRetries) {
-      debugPrint('Maximum retry attempts reached');
+    if (_retryCount >= _maxRetries || _isRetrying) {
+      debugPrint('Maximum retry attempts reached or already retrying');
       return;
     }
 
     _retryTimer?.cancel();
-    _retryTimer = Timer(_retryInterval, () async {
+    _isRetrying = true;
+    
+    final backoffDelay = Duration(seconds: _retryInterval.inSeconds * (_retryCount + 1));
+    _retryTimer = Timer(backoffDelay, () async {
       _retryCount++;
       debugPrint('Retrying location initialization (attempt $_retryCount/$_maxRetries)');
       
       try {
         await _checkPermissions();
-        if (_hasPermission && !_isTracking) {
+        if (_hasPermission && !_isTracking && !_isInitializing) {
           await startLocationTracking();
         }
+        _isRetrying = false;
       } catch (e) {
         debugPrint('Retry failed: $e');
+        _isRetrying = false;
         if (_retryCount < _maxRetries) {
           _startRetryMechanism();
         }
@@ -375,30 +401,84 @@ class LocationProvider extends ChangeNotifier {
     });
   }
 
-  // Location quality monitoring
-  void _startLocationQualityMonitoring() {
-    Timer.periodic(const Duration(minutes: 1), (timer) {
-      if (_lastUpdateTime != null) {
-        final timeSinceUpdate = DateTime.now().difference(_lastUpdateTime!);
-        if (timeSinceUpdate.inMinutes > 2) {
-          _isLocationStale = true;
-          notifyListeners();
-        }
+  // Location update with enhanced filtering
+  void _updateLocation(Position position) {
+    final newLocation = LatLng(position.latitude, position.longitude);
+    
+    // FIXED: Validate location data
+    if (!isValidLocation(newLocation)) {
+      debugPrint('Invalid location received: ${position.latitude}, ${position.longitude}');
+      return;
+    }
+
+    // FIXED: Filter out obviously bad readings
+    if (position.accuracy > 100) {
+      debugPrint('Location accuracy too poor: ${position.accuracy}m');
+      return;
+    }
+
+    _currentPosition = position;
+    _currentLatLng = newLocation;
+    _accuracy = position.accuracy;
+    _speed = position.speed;
+    _heading = position.heading;
+    _lastUpdateTime = DateTime.now();
+    _isLocationStale = false;
+    _poorSignalCount = 0; // Reset on successful update
+
+    // Update accuracy history
+    _accuracyHistory.add(_accuracy);
+    if (_accuracyHistory.length > 10) {
+      _accuracyHistory.removeAt(0);
+    }
+
+    // Distance calculation
+    if (_lastLocationForDistance != null) {
+      final distance = _calculateDistance(_lastLocationForDistance!, newLocation);
+      if (distance > 2.0) { // Only count significant movements
+        _totalDistance += distance;
+        _currentTrip += distance;
       }
-    });
+    }
+    _lastLocationForDistance = newLocation;
+
+    _addToHistory(newLocation);
+    
+    // FIXED: Safe stream addition
+    _ensureStreamController();
+    if (!_isStreamControllerClosed) {
+      _locationStreamController!.add(newLocation);
+    }
+    
+    notifyListeners();
+    
+    debugPrint('Location updated: ${position.latitude}, ${position.longitude} (±${_accuracy.toStringAsFixed(1)}m)');
   }
 
   // Internal method to get current location
   Future<void> _getCurrentLocation() async {
     try {
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 10),
+        desiredAccuracy: LocationAccuracy.medium,
+        timeLimit: const Duration(seconds: 15),
       );
       _updateLocation(position);
     } catch (e) {
       debugPrint('Failed to get initial location: $e');
     }
+  }
+
+  // Location quality monitoring
+  void _startLocationQualityMonitoring() {
+    Timer.periodic(const Duration(minutes: 1), (timer) {
+      if (_lastUpdateTime != null) {
+        final timeSinceUpdate = DateTime.now().difference(_lastUpdateTime!);
+        if (timeSinceUpdate.inMinutes > 3) { // Increased threshold
+          _isLocationStale = true;
+          notifyListeners();
+        }
+      }
+    });
   }
 
   // Add location to history with optimization
@@ -407,7 +487,7 @@ class LocationProvider extends ChangeNotifier {
     if (_locationHistory.isNotEmpty) {
       final lastLocation = _locationHistory.last;
       final distance = _calculateDistance(lastLocation, location);
-      if (distance < 5.0) return; // Skip if less than 5 meters difference
+      if (distance < 3.0) return; // Increased threshold to reduce noise
     }
 
     _locationHistory.add(location);
@@ -422,59 +502,36 @@ class LocationProvider extends ChangeNotifier {
   final Map<String, double> _distanceCache = {};
   
   double _calculateDistance(LatLng point1, LatLng point2) {
-    final key = '${point1.latitude},${point1.longitude}-${point2.latitude},${point2.longitude}';
+    final key = '${point1.latitude.toStringAsFixed(6)},${point1.longitude.toStringAsFixed(6)}-${point2.latitude.toStringAsFixed(6)},${point2.longitude.toStringAsFixed(6)}';
+    
     if (_distanceCache.containsKey(key)) {
       return _distanceCache[key]!;
     }
 
-    const double earthRadius = 6371000; // meters
-    final double lat1Rad = point1.latitude * math.pi / 180;
-    final double lat2Rad = point2.latitude * math.pi / 180;
-    final double deltaLatRad = (point2.latitude - point1.latitude) * math.pi / 180;
-    final double deltaLngRad = (point2.longitude - point1.longitude) * math.pi / 180;
-
-    final double a = math.sin(deltaLatRad / 2) * math.sin(deltaLatRad / 2) +
-        math.cos(lat1Rad) * math.cos(lat2Rad) * math.sin(deltaLngRad / 2) * math.sin(deltaLngRad / 2);
-    final double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
-
-    final double distance = earthRadius * c;
-    _distanceCache[key] = distance;
+    const double earthRadius = 6371000; // Earth radius in meters
     
-    // Keep cache size manageable
+    final lat1Rad = point1.latitude * (math.pi / 180);
+    final lat2Rad = point2.latitude * (math.pi / 180);
+    final deltaLatRad = (point2.latitude - point1.latitude) * (math.pi / 180);
+    final deltaLngRad = (point2.longitude - point1.longitude) * (math.pi / 180);
+
+    final a = math.sin(deltaLatRad / 2) * math.sin(deltaLatRad / 2) +
+        math.cos(lat1Rad) * math.cos(lat2Rad) *
+        math.sin(deltaLngRad / 2) * math.sin(deltaLngRad / 2);
+    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+
+    final distance = earthRadius * c;
+    
+    // Cache the result
     if (_distanceCache.length > 100) {
-      _distanceCache.clear();
+      _distanceCache.clear(); // Clear cache if it gets too large
     }
+    _distanceCache[key] = distance;
     
     return distance;
   }
 
-  // Calculate distance to a point
-  double? getDistanceTo(LatLng destination) {
-    if (_currentLatLng == null) return null;
-    return _calculateDistance(_currentLatLng!, destination);
-  }
-
-  // Get bearing to a point
-  double? getBearingTo(LatLng destination) {
-    if (_currentLatLng == null) return null;
-    
-    final double lat1Rad = _currentLatLng!.latitude * math.pi / 180;
-    final double lat2Rad = destination.latitude * math.pi / 180;
-    final double deltaLngRad = (destination.longitude - _currentLatLng!.longitude) * math.pi / 180;
-
-    final double y = math.sin(deltaLngRad) * math.cos(lat2Rad);
-    final double x = math.cos(lat1Rad) * math.sin(lat2Rad) - math.sin(lat1Rad) * math.cos(lat2Rad) * math.cos(deltaLngRad);
-
-    double bearing = math.atan2(y, x) * 180 / math.pi;
-    return (bearing + 360) % 360; // Normalize to 0-360
-  }
-
-  // Enhanced location accuracy checking
-  bool get isLocationAccurate => _accuracy > 0 && _accuracy <= 10; // Within 10 meters
-  bool get isLocationGood => _accuracy > 0 && _accuracy <= 20; // Within 20 meters
-  bool get isLocationUsable => _accuracy > 0 && _accuracy <= 50; // Within 50 meters
-
-  // Get location accuracy status
+  // Enhanced accuracy status
   String get accuracyStatus {
     if (_accuracy <= 5) return 'Excellent';
     if (_accuracy <= 10) return 'Good';
@@ -483,50 +540,30 @@ class LocationProvider extends ChangeNotifier {
     return 'Very Poor';
   }
 
-  Color get accuracyColor {
-    if (_accuracy <= 10) return const Color(0xFF4CAF50); // Green
-    if (_accuracy <= 20) return const Color(0xFFFF9800); // Orange
-    return const Color(0xFFF44336); // Red
-  }
+  bool get isLocationAccurate => _accuracy <= 20;
 
-  // Get speed in different units
+  // Enhanced speed calculation
   double get speedKmh => _speed * 3.6; // Convert m/s to km/h
-  double get speedMph => _speed * 2.237; // Convert m/s to mph
 
-  // Enhanced movement detection
-  bool get isMoving => _speed > 0.5; // Moving if speed > 0.5 m/s
-  bool get isWalking => _speed > 0.5 && _speed <= 2.0; // Walking speed range
-  bool get isRunning => _speed > 2.0 && _speed <= 5.0; // Running speed range
-  bool get isDriving => _speed > 5.0; // Likely driving
-
+  // Movement detection
   String get movementType {
-    if (!isMoving) return 'Stationary';
-    if (isWalking) return 'Walking';
-    if (isRunning) return 'Running';
-    if (isDriving) return 'Driving';
-    return 'Moving';
+    if (_speed < 0.5) return 'Stationary';
+    if (_speed < 2.0) return 'Walking';
+    if (_speed < 6.0) return 'Running';
+    if (_speed < 15.0) return 'Cycling';
+    return 'Vehicle';
   }
 
-  // Format heading as compass direction
+  // Compass direction
   String get compassDirection {
     if (_heading < 0) return 'Unknown';
     
-    const directions = [
-      'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
-      'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'
-    ];
-    
-    final index = ((_heading + 11.25) / 22.5).floor() % 16;
+    const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    final index = ((_heading + 22.5) / 45).floor() % 8;
     return directions[index];
   }
 
-  // Trip management
-  void resetTrip() {
-    _currentTrip = 0.0;
-    _tripStartTime = DateTime.now();
-    notifyListeners();
-  }
-
+  // Trip duration
   Duration? get tripDuration {
     if (_tripStartTime == null) return null;
     return DateTime.now().difference(_tripStartTime!);
@@ -575,6 +612,8 @@ class LocationProvider extends ChangeNotifier {
       'lastUpdate': _lastUpdateTime?.toIso8601String(),
       'currentSettings': _getSettingsName(_currentSettings),
       'retryCount': _retryCount,
+      'isRetrying': _isRetrying,
+      'isInitializing': _isInitializing,
     };
   }
 
@@ -605,27 +644,12 @@ class LocationProvider extends ChangeNotifier {
       _isLocationStale = false;
       _addToHistory(location);
       notifyListeners();
-      _locationStreamController.add(location);
+      _ensureStreamController();
+      if (!_isStreamControllerClosed) {
+        _locationStreamController!.add(location);
+      }
       debugPrint('Mock location set: ${location.latitude}, ${location.longitude}');
     }
-  }
-
-  // Simulate movement for testing
-  void simulateMovement(List<LatLng> waypoints, {Duration? interval}) {
-    if (!kDebugMode) return;
-    
-    final intervalDuration = interval ?? const Duration(seconds: 2);
-    int currentIndex = 0;
-    
-    Timer.periodic(intervalDuration, (timer) {
-      if (currentIndex >= waypoints.length) {
-        timer.cancel();
-        return;
-      }
-      
-      setMockLocation(waypoints[currentIndex]);
-      currentIndex++;
-    });
   }
 
   // Error handling
@@ -644,7 +668,9 @@ class LocationProvider extends ChangeNotifier {
     return location.latitude >= -90 && 
            location.latitude <= 90 && 
            location.longitude >= -180 && 
-           location.longitude <= 180;
+           location.longitude <= 180 &&
+           location.latitude != 0.0 && 
+           location.longitude != 0.0; // Exclude null island
   }
 
   // Check if location is within a geographic bounds
@@ -671,60 +697,5 @@ class LocationProvider extends ChangeNotifier {
       totalLat / _locationHistory.length,
       totalLng / _locationHistory.length,
     );
-  }
-
-  // Get bounding box of location history
-  Map<String, LatLng>? getHistoryBounds() {
-    if (_locationHistory.isEmpty) return null;
-    
-    double minLat = _locationHistory.first.latitude;
-    double maxLat = _locationHistory.first.latitude;
-    double minLng = _locationHistory.first.longitude;
-    double maxLng = _locationHistory.first.longitude;
-    
-    for (final location in _locationHistory) {
-      minLat = math.min(minLat, location.latitude);
-      maxLat = math.max(maxLat, location.latitude);
-      minLng = math.min(minLng, location.longitude);
-      maxLng = math.max(maxLng, location.longitude);
-    }
-    
-    return {
-      'southWest': LatLng(minLat, minLng),
-      'northEast': LatLng(maxLat, maxLng),
-    };
-  }
-
-  // Get estimated accuracy based on recent readings
-  double get estimatedAccuracy {
-    if (_accuracyHistory.isEmpty) return _accuracy;
-    
-    // Use median for better estimation
-    final sorted = List<double>.from(_accuracyHistory)..sort();
-    final middle = sorted.length ~/ 2;
-    
-    if (sorted.length % 2 == 0) {
-      return (sorted[middle - 1] + sorted[middle]) / 2;
-    } else {
-      return sorted[middle];
-    }
-  }
-
-  // Force location settings reset to high accuracy
-  void resetToHighAccuracy() {
-    _currentSettings = _highAccuracySettings;
-    _poorSignalCount = 0;
-    
-    if (_isTracking) {
-      _restartLocationTracking();
-    }
-  }
-
-  @override
-  void dispose() {
-    _stopLocationTracking();
-    _retryTimer?.cancel();
-    _locationStreamController.close();
-    super.dispose();
   }
 }
