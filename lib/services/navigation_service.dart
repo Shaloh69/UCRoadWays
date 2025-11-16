@@ -2,7 +2,17 @@ import 'dart:math';
 import 'package:latlong2/latlong.dart';
 import '../models/models.dart';
 
-// Navigation types enum
+/// Service for calculating navigation routes in UCRoadWays.
+///
+/// This service provides comprehensive navigation capabilities including:
+/// - Indoor navigation (within floors and between floors)
+/// - Outdoor navigation (road network)
+/// - Multi-building navigation
+/// - Indoor-to-outdoor transitions
+/// - Turn-by-turn instructions
+/// - Accessibility-aware routing (elevator vs stairs preference)
+
+/// Navigation type enumeration for different route scenarios.
 enum NavigationType {
   sameFloor,
   sameBuilding,
@@ -44,10 +54,32 @@ class NavigationInstruction {
   });
 }
 
+/// Navigation service for UCRoadWays.
+///
+/// Provides route calculation, turn-by-turn instructions, and navigation
+/// progress tracking for both indoor and outdoor environments.
 class NavigationService {
-  static const double _defaultWalkingSpeed = 1.4; // m/s
+  /// Default walking speed in meters per second (1.4 m/s ≈ 5 km/h)
+  static const double _defaultWalkingSpeed = 1.4;
 
-  /// Main navigation calculation entry point
+  /// Calculates a navigation route between two points.
+  ///
+  /// This is the main entry point for navigation. It automatically determines
+  /// the navigation type (indoor, outdoor, or mixed) and calculates the
+  /// optimal route.
+  ///
+  /// Parameters:
+  /// - [start]: Starting location coordinates
+  /// - [end]: Destination location coordinates
+  /// - [roadSystem]: The road system containing buildings and roads
+  /// - [startFloorId]: Optional floor ID if starting indoors
+  /// - [endFloorId]: Optional floor ID if ending indoors
+  /// - [startBuildingId]: Optional building ID if starting indoors
+  /// - [endBuildingId]: Optional building ID if ending indoors
+  /// - [preferElevator]: Whether to prefer elevators over stairs (default: true)
+  ///
+  /// Returns a [NavigationRoute] with waypoints and instructions, or null if
+  /// no route could be calculated.
   static Future<NavigationRoute?> calculateRoute(
     LatLng start,
     LatLng end,

@@ -1,14 +1,28 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/models.dart';
 
+/// Service for exporting UCRoadWays data to GeoJSON format.
+///
+/// This service provides methods to export road systems, buildings, roads,
+/// and landmarks to GeoJSON format compatible with OpenLayers and other
+/// mapping libraries. It supports both single-file and multi-layer exports.
 class GeoJsonExportService {
-  /// Export road system to GeoJSON format optimized for OpenLayers
+  /// Exports a road system to GeoJSON format optimized for OpenLayers.
+  ///
+  /// Parameters:
+  /// - [roadSystem]: The road system to export
+  /// - [includeIndoorData]: Whether to include indoor navigation data (default: true)
+  /// - [includeMetadata]: Whether to include metadata about the export (default: true)
+  /// - [layerFilter]: Optional list of layer names to include (null = all layers)
+  ///
+  /// Returns a [File] containing the exported GeoJSON data.
+  ///
+  /// Throws an exception if the export fails.
   static Future<File> exportToGeoJSON(RoadSystem roadSystem, {
     bool includeIndoorData = true,
     bool includeMetadata = true,
@@ -36,7 +50,17 @@ class GeoJsonExportService {
     }
   }
 
-  /// Export multiple layer files for complex OpenLayers applications
+  /// Exports multiple layer files for complex OpenLayers applications.
+  ///
+  /// This method creates separate GeoJSON files for each data layer:
+  /// - buildings: Building footprints and floor data
+  /// - outdoor_roads: Outdoor road network
+  /// - indoor_roads: Indoor corridors and pathways
+  /// - landmarks: Points of interest
+  /// - entrances: Building entrances and access points
+  /// - accessibility: Accessibility features
+  ///
+  /// Returns a Map where keys are layer names and values are the exported files.
   static Future<Map<String, File>> exportToLayeredGeoJSON(RoadSystem roadSystem) async {
     try {
       final directory = await getApplicationDocumentsDirectory();
@@ -714,10 +738,10 @@ class GeoJsonExportService {
 
   static double _calculateDistance(LatLng point1, LatLng point2) {
     const double earthRadius = 6371000;
-    final double lat1Rad = point1.latitude * 3.14159265359 / 180;
-    final double lat2Rad = point2.latitude * 3.14159265359 / 180;
-    final double deltaLatRad = (point2.latitude - point1.latitude) * 3.14159265359 / 180;
-    final double deltaLngRad = (point2.longitude - point1.longitude) * 3.14159265359 / 180;
+    final double lat1Rad = point1.latitude * math.pi / 180;
+    final double lat2Rad = point2.latitude * math.pi / 180;
+    final double deltaLatRad = (point2.latitude - point1.latitude) * math.pi / 180;
+    final double deltaLngRad = (point2.longitude - point1.longitude) * math.pi / 180;
 
     final double a = math.sin(deltaLatRad / 2) * math.sin(deltaLatRad / 2) +
         math.cos(lat1Rad) * math.cos(lat2Rad) * math.sin(deltaLngRad / 2) * math.sin(deltaLngRad / 2);
