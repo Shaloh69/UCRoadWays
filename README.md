@@ -39,3 +39,15 @@ flutter pub get
 
 # Run on emulator or device
 flutter run
+```
+
+### ⚠️ Build Issues on Windows?
+
+If you encounter build errors (especially after moving the project or Flutter SDK), see:
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Quick fixes for common errors
+- **[FLUTTER_SETUP_WINDOWS.md](FLUTTER_SETUP_WINDOWS.md)** - Detailed Windows setup guide
+
+**Quick fixes:**
+```cmd
+fix_flutter_path.bat      # Fix Flutter SDK path issues
+fix_gradle_locks.bat      # Fix Gradle file lock errors
