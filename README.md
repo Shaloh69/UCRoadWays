@@ -46,8 +46,10 @@ flutter run
 If you encounter build errors (especially after moving the project or Flutter SDK), see:
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Quick fixes for common errors
 - **[FLUTTER_SETUP_WINDOWS.md](FLUTTER_SETUP_WINDOWS.md)** - Detailed Windows setup guide
+- **[PROJECT_RESET_GUIDE.md](PROJECT_RESET_GUIDE.md)** - Complete project reset (when all else fails)
 
 **Quick fixes:**
 ```cmd
 fix_flutter_path.bat      # Fix Flutter SDK path issues
 fix_gradle_locks.bat      # Fix Gradle file lock errors
+reset_flutter_project.bat # Complete project reset (nuclear option)

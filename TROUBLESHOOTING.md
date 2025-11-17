@@ -132,6 +132,8 @@ Run them from the project root directory.
 
 ## When All Else Fails
 
+### Option 1: Try Fix Scripts After Restart
+
 1. Close **ALL** applications (Android Studio, VS Code, Command Prompts)
 2. Restart your computer
 3. Run both fix scripts:
@@ -143,6 +145,24 @@ Run them from the project root directory.
    ```cmd
    flutter run
    ```
+
+### Option 2: Complete Project Reset (Nuclear Option)
+
+If nothing works and build files are corrupted beyond repair, **start fresh**:
+
+```cmd
+reset_flutter_project.bat
+```
+
+This creates a clean Flutter project and copies only your source code (no build files).
+
+**See:** [PROJECT_RESET_GUIDE.md](PROJECT_RESET_GUIDE.md) for detailed instructions.
+
+**Why this works:**
+- Removes all corrupted build caches
+- Gets fresh Flutter tooling
+- Keeps your source code and configs
+- Automatically sets correct Flutter SDK path
 
 ---
 
