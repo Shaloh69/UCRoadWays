@@ -85,6 +85,85 @@ If `where flutter` returns "INFO: Could not find files", you need to install Flu
 3. Add `C:\tools\flutter\bin` to your PATH environment variable
 4. Run `flutter doctor` to complete setup
 
+## Gradle File Lock Error (After Fixing SDK Path)
+
+If you fixed the SDK path but now get this error:
+```
+Unable to delete directory 'C:\Projects\Flutter\flutter\packages\flutter_tools\gradle\build\classes\kotlin\main'
+Failed to delete some children. This might happen because a process has files open...
+```
+
+This is a **Windows file locking issue**. Files are locked by Gradle daemon, IDE, or antivirus.
+
+### Quick Fix for File Locks
+
+1. **Close all these applications:**
+   - Android Studio
+   - VS Code
+   - IntelliJ IDEA
+   - Any Command Prompt windows running Gradle
+
+2. **Run the cleanup script:**
+   ```cmd
+   fix_gradle_locks.bat
+   ```
+
+   This script will:
+   - Stop the Gradle daemon
+   - Clean all build directories
+   - Remove cached files
+   - Regenerate packages
+
+3. **Try again:**
+   ```cmd
+   flutter run
+   ```
+
+### Manual Fix for File Locks
+
+If the script doesn't work:
+
+1. **Stop Gradle daemon:**
+   ```cmd
+   cd C:\Projects\Thesis\UCWays_RoadMaker\ucroadways\android
+   gradlew --stop
+   ```
+
+2. **Clean Flutter project:**
+   ```cmd
+   cd ..
+   flutter clean
+   ```
+
+3. **Delete build directories manually:**
+   ```cmd
+   rmdir /s /q android\.gradle
+   rmdir /s /q android\app\build
+   rmdir /s /q android\build
+   ```
+
+4. **Clean Flutter SDK Gradle build (if possible):**
+   ```cmd
+   REM Replace with your actual Flutter path
+   rmdir /s /q C:\Projects\Flutter\flutter\packages\flutter_tools\gradle\build
+   ```
+
+   **Note:** If this fails, restart your computer and try again.
+
+5. **Regenerate:**
+   ```cmd
+   flutter pub get
+   flutter run
+   ```
+
+### If Nothing Works - Restart Computer
+
+Sometimes Windows locks files so tightly that only a restart helps:
+1. Close all applications
+2. Restart your computer
+3. Run `fix_gradle_locks.bat`
+4. Try `flutter run`
+
 ## Still Having Issues?
 
 ### Check PATH Environment Variable
