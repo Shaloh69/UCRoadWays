@@ -1,0 +1,13 @@
+# This is an example local.properties file
+# Copy this file to local.properties and update with your Flutter SDK path
+# Note: local.properties is gitignored and machine-specific
+
+# Flutter SDK path
+# Windows example:
+#   flutter.sdk=C:\\Users\\YourUsername\\flutter
+# macOS/Linux example:
+#   flutter.sdk=/Users/YourUsername/flutter
+flutter.sdk=YOUR_FLUTTER_SDK_PATH_HERE
+
+# Android SDK path (usually auto-detected, but can be set manually)
+# sdk.dir=C:\\Users\\YourUsername\\AppData\\Local\\Android\\sdk
