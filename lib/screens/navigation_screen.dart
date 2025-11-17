@@ -310,7 +310,7 @@ class _NavigationScreenState extends State<NavigationScreen>
               Switch(
                 value: useCurrentLocation,
                 onChanged: (_) => onToggleCurrentLocation(),
-                activeColor: Colors.blue,
+                activeThumbColor: Colors.blue,
               ),
               const Text('Current', style: TextStyle(fontSize: 12)),
             ],
@@ -566,11 +566,11 @@ class _NavigationScreenState extends State<NavigationScreen>
                 color: Colors.blue[50],
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Row(
+              child: const Row(
                 children: [
-                  const Icon(Icons.arrow_forward, color: Colors.blue),
-                  const SizedBox(width: 8),
-                  const Expanded(
+                  Icon(Icons.arrow_forward, color: Colors.blue),
+                  SizedBox(width: 8),
+                  Expanded(
                     child: Text(
                       'Continue straight for 50 meters',
                       style: TextStyle(fontWeight: FontWeight.bold),
@@ -591,7 +591,7 @@ class _NavigationScreenState extends State<NavigationScreen>
   }
 
   Widget _buildRouteProgressCard(NavigationRoute route, LocationProvider locationProvider) {
-    final progress = 0.3; // Calculate actual progress
+    const progress = 0.3; // Calculate actual progress
     final remainingDistance = route.totalDistance * (1 - progress);
     
     return Card(

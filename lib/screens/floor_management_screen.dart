@@ -104,7 +104,7 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
             children: [
               Expanded(
                 child: DropdownButtonFormField<String>(
-                  value: _selectedBuildingId.isEmpty ? null : _selectedBuildingId,
+                  initialValue: _selectedBuildingId.isEmpty ? null : _selectedBuildingId,
                   decoration: const InputDecoration(
                     labelText: 'Filter by Building',
                     border: OutlineInputBorder(),
@@ -262,7 +262,7 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
               Text('${floorStats['roads']} roads'),
               if (floorStats['verticalCirculation']! > 0) ...[
                 const SizedBox(width: 8),
-                Icon(Icons.elevator, size: 12, color: Colors.green),
+                const Icon(Icons.elevator, size: 12, color: Colors.green),
                 Text('${floorStats['verticalCirculation']}'),
               ],
             ],
@@ -387,7 +387,7 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
         
         return Card(
           child: ExpansionTile(
-            leading: Icon(Icons.business, color: Colors.purple),
+            leading: const Icon(Icons.business, color: Colors.purple),
             title: Text(building.name),
             subtitle: Text('${elements.length} vertical access points'),
             children: elements.map((element) {
@@ -461,7 +461,7 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
                     LinearProgressIndicator(
                       value: 1.0 - (accessibilityIssues.length / (system.buildings.length * 5)),
                       backgroundColor: Colors.red.shade100,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.green),
+                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
                     ),
                   ],
                 ],

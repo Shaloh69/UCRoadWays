@@ -79,10 +79,7 @@ class OfflineFirstImageProvider extends ImageProvider<OfflineFirstImageProvider>
         // Try online first
         bytes = await _downloadOnlineTile();
         
-        if (bytes == null) {
-          // Fallback to offline
-          bytes = await offlineService.getTile(coordinates.z, coordinates.x, coordinates.y);
-        }
+        bytes ??= await offlineService.getTile(coordinates.z, coordinates.x, coordinates.y);
       }
 
       if (bytes == null) {

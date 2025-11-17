@@ -336,11 +336,11 @@ class _BottomPanelState extends State<BottomPanel>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            const Row(
               children: [
                 Icon(Icons.business, color: Colors.purple),
-                const SizedBox(width: 8),
-                const Text(
+                SizedBox(width: 8),
+                Text(
                   'Current Location',
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),

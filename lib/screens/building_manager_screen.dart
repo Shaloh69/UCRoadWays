@@ -89,8 +89,8 @@ class _BuildingManagerScreenState extends State<BuildingManagerScreen>
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _showAddBuildingDialog(),
-        child: const Icon(Icons.add),
         tooltip: 'Add Building',
+        child: const Icon(Icons.add),
       ),
     );
   }
@@ -120,7 +120,7 @@ class _BuildingManagerScreenState extends State<BuildingManagerScreen>
             children: [
               Expanded(
                 child: DropdownButtonFormField<String>(
-                  value: _selectedBuildingFilter.isEmpty ? null : _selectedBuildingFilter,
+                  initialValue: _selectedBuildingFilter.isEmpty ? null : _selectedBuildingFilter,
                   decoration: const InputDecoration(
                     labelText: 'Filter by Type',
                     border: OutlineInputBorder(),
@@ -214,7 +214,7 @@ class _BuildingManagerScreenState extends State<BuildingManagerScreen>
                 child: Wrap(
                   spacing: 4,
                   children: [
-                    Icon(Icons.warning, size: 16, color: Colors.orange),
+                    const Icon(Icons.warning, size: 16, color: Colors.orange),
                     Text(
                       '${validationIssues.length} issue${validationIssues.length != 1 ? 's' : ''}',
                       style: const TextStyle(color: Colors.orange, fontSize: 12),

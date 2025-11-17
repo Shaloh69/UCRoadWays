@@ -573,7 +573,7 @@ class NavigationService {
     final path = <LatLng>[];
     
     // Basic direct path with obstacle avoidance
-    final stepCount = 5;
+    const stepCount = 5;
     for (int i = 1; i < stepCount; i++) {
       final lat = start.latitude + (end.latitude - start.latitude) * (i / stepCount);
       final lng = start.longitude + (end.longitude - start.longitude) * (i / stepCount);
@@ -589,7 +589,7 @@ class NavigationService {
     final path = <LatLng>[];
     
     // Find nearest roads and create path
-    final stepCount = 10;
+    const stepCount = 10;
     for (int i = 1; i < stepCount; i++) {
       final lat = start.latitude + (end.latitude - start.latitude) * (i / stepCount);
       final lng = start.longitude + (end.longitude - start.longitude) * (i / stepCount);

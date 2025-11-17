@@ -513,7 +513,7 @@ class BuildingProvider extends ChangeNotifier {
     final hasAccessibleEntrance = building.floors.any((f) => 
         f.landmarks.any((l) => l.type == 'entrance' && 
         l.name.toLowerCase().contains('accessible')));
-    if (!hasAccessibleEntrance && building.floors.length > 0) {
+    if (!hasAccessibleEntrance && building.floors.isNotEmpty) {
       issues.add('Building lacks accessible entrance');
     }
     

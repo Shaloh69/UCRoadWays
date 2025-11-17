@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
 import '../providers/location_provider.dart';
 import '../providers/building_provider.dart' as bp;
 import '../providers/road_system_provider.dart';

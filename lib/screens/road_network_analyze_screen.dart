@@ -149,8 +149,9 @@ class _RoadNetworkAnalyzeScreenState extends State<RoadNetworkAnalyzeScreen>
     // Calculate building size distribution
     final buildingSizes = <String, int>{};
     for (final building in system.buildings) {
-      if (building.floors.length == 1) buildingSizes['small'] = (buildingSizes['small'] ?? 0) + 1;
-      else if (building.floors.length <= 3) buildingSizes['medium'] = (buildingSizes['medium'] ?? 0) + 1;
+      if (building.floors.length == 1) {
+        buildingSizes['small'] = (buildingSizes['small'] ?? 0) + 1;
+      } else if (building.floors.length <= 3) buildingSizes['medium'] = (buildingSizes['medium'] ?? 0) + 1;
       else buildingSizes['large'] = (buildingSizes['large'] ?? 0) + 1;
     }
 

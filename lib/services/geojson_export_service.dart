@@ -103,7 +103,7 @@ class GeoJsonExportService {
     final features = <Map<String, dynamic>>[];
     
     // Filter layers if specified
-    final shouldInclude = (String layer) => 
+    bool shouldInclude(String layer) => 
         layerFilter == null || layerFilter.contains(layer);
     
     // Add buildings as polygons

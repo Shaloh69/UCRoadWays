@@ -495,9 +495,9 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
                       color: _offlineMapInitialized ? Colors.blue : Colors.orange,
                     ),
                     const SizedBox(width: 4),
-                    Text(
+                    const Text(
                       'OFFLINE',
-                      style: const TextStyle(fontSize: 12),
+                      style: TextStyle(fontSize: 12),
                     ),
                   ],
                 ),
@@ -1094,7 +1094,7 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
               ),
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
-                value: selectedType,
+                initialValue: selectedType,
                 decoration: const InputDecoration(labelText: 'Type'),
                 items: [
                   'information', 'entrance', 'elevator', 'stairs', 'restroom',

@@ -7,7 +7,7 @@ import '../models/models.dart';
 import '../services/services.dart';
 
 class RoadSystemProvider extends ChangeNotifier {
-  List<RoadSystem> _roadSystems = [];
+  final List<RoadSystem> _roadSystems = [];
   RoadSystem? _currentSystem;
   bool _isLoading = false;
   String? _error;
@@ -535,8 +535,4 @@ class RoadSystemProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  @override
-  void dispose() {
-    super.dispose();
-  }
 }

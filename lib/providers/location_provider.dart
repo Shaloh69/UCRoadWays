@@ -201,7 +201,7 @@ class LocationProvider extends ChangeNotifier {
 
       _updateLocation(position);
       return _currentLatLng;
-    } on TimeoutException catch (e) {
+    } on TimeoutException {
       _setError('Location request timed out. Trying with lower accuracy...');
       return _getCurrentLocationFallback();
     } on LocationServiceDisabledException {

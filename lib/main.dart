@@ -242,7 +242,7 @@ class _SplashScreenState extends State<SplashScreen>
                       const SizedBox(height: 32),
                       
                       // App name
-                      Text(
+                      const Text(
                         'UCRoadWays',
                         style: TextStyle(
                           fontSize: 32,
@@ -267,7 +267,7 @@ class _SplashScreenState extends State<SplashScreen>
                       const SizedBox(height: 48),
                       
                       // Loading indicator
-                      SizedBox(
+                      const SizedBox(
                         width: 40,
                         height: 40,
                         child: CircularProgressIndicator(
