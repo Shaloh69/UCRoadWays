@@ -10,7 +10,16 @@ Included build 'C:\...\flutter\packages\flutter_tools\gradle' does not exist.
 
 This means your `local.properties` file is missing or has an incorrect Flutter SDK path.
 
-### Quick Fix
+### Windows Users - IMPORTANT
+
+**If you moved your Flutter SDK or project to a different location**, see [FLUTTER_SETUP_WINDOWS.md](../FLUTTER_SETUP_WINDOWS.md) for detailed Windows-specific instructions and an automated fix script.
+
+Quick fix for Windows:
+```cmd
+fix_flutter_path.bat
+```
+
+### Quick Fix (All Platforms)
 
 Run this command in the project root directory:
 ```bash
