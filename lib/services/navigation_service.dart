@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'package:latlong2/latlong.dart';
 import '../models/models.dart';
+import 'road_graph_builder.dart';
+import 'astar_pathfinder.dart';
 
 /// Service for calculating navigation routes in UCRoadWays.
 ///
@@ -61,6 +63,26 @@ class NavigationInstruction {
 class NavigationService {
   /// Default walking speed in meters per second (1.4 m/s ≈ 5 km/h)
   static const double _defaultWalkingSpeed = 1.4;
+
+  /// Cache for road graph to avoid rebuilding on every route calculation
+  static RoadGraph? _cachedGraph;
+  static String? _cachedSystemId;
+
+  /// Get or build the road graph for the given road system
+  static RoadGraph _getGraph(RoadSystem roadSystem) {
+    if (_cachedGraph == null || _cachedSystemId != roadSystem.id) {
+      final builder = RoadGraphBuilder();
+      _cachedGraph = builder.buildGraph(roadSystem);
+      _cachedSystemId = roadSystem.id;
+    }
+    return _cachedGraph!;
+  }
+
+  /// Clear the cached graph (call when road system is modified)
+  static void clearGraphCache() {
+    _cachedGraph = null;
+    _cachedSystemId = null;
+  }
 
   /// Calculates a navigation route between two points.
   ///
@@ -172,7 +194,7 @@ class NavigationService {
     
     if (context.startFloor != null) {
       // Indoor navigation on same floor
-      final path = _findIndoorPath(start, end, context.startFloor!);
+      final path = _findIndoorPath(start, end, context.startFloor!, roadSystem: context.roadSystem);
       waypoints.addAll(path);
     } else {
       // Outdoor navigation
@@ -219,10 +241,10 @@ class NavigationService {
     }
     
     // Path to circulation point on start floor
-    final pathToCirculation = _findIndoorPath(start, circulation.position, startFloor);
+    final pathToCirculation = _findIndoorPath(start, circulation.position, startFloor, roadSystem: context.roadSystem);
     waypoints.addAll(pathToCirculation);
     waypoints.add(circulation.position);
-    
+
     // Create floor transition
     final transition = FloorTransition(
       fromFloorId: startFloor.id,
@@ -233,14 +255,14 @@ class NavigationService {
     );
     floorTransitions.add(transition);
     floorChanges.add(_generateFloorChangeInstruction(startFloor, endFloor, circulation));
-    
+
     // Find corresponding circulation on end floor
     final endCirculation = _findCorrespondingCirculation(circulation, endFloor);
     if (endCirculation != null) {
       waypoints.add(endCirculation.position);
-      
+
       // Path from circulation to end point on end floor
-      final pathFromCirculation = _findIndoorPath(endCirculation.position, end, endFloor);
+      final pathFromCirculation = _findIndoorPath(endCirculation.position, end, endFloor, roadSystem: context.roadSystem);
       waypoints.addAll(pathFromCirculation);
     }
     
@@ -277,7 +299,7 @@ class NavigationService {
     // 1. Navigate to building exit from start floor
     final exitPoint = _findBuildingExit(start, startBuilding, startFloor);
     if (exitPoint != null) {
-      final pathToExit = _findIndoorPath(start, exitPoint.position, startFloor);
+      final pathToExit = _findIndoorPath(start, exitPoint.position, startFloor, roadSystem: context.roadSystem);
       waypoints.addAll(pathToExit);
       waypoints.add(exitPoint.position);
       
@@ -328,10 +350,10 @@ class NavigationService {
           );
           if (circulation != null) {
             final pathToCirculation = _findIndoorPath(
-              entrancePoint.position, circulation.position, groundFloor
+              entrancePoint.position, circulation.position, groundFloor, roadSystem: context.roadSystem
             );
             waypoints.addAll(pathToCirculation);
-            
+
             final transition = FloorTransition(
               fromFloorId: groundFloor.id,
               toFloorId: endFloor.id,
@@ -341,19 +363,19 @@ class NavigationService {
             );
             floorTransitions.add(transition);
             floorChanges.add(_generateFloorChangeInstruction(groundFloor, endFloor, circulation));
-            
+
             // Path from circulation to end point
             final endCirculation = _findCorrespondingCirculation(circulation, endFloor);
             if (endCirculation != null) {
               waypoints.add(endCirculation.position);
-              final pathFromCirculation = _findIndoorPath(endCirculation.position, end, endFloor);
+              final pathFromCirculation = _findIndoorPath(endCirculation.position, end, endFloor, roadSystem: context.roadSystem);
               waypoints.addAll(pathFromCirculation);
             }
           }
         }
       } else {
         // Same floor (ground floor)
-        final pathToEnd = _findIndoorPath(entrancePoint.position, end, endFloor);
+        final pathToEnd = _findIndoorPath(entrancePoint.position, end, endFloor, roadSystem: context.roadSystem);
         waypoints.addAll(pathToEnd);
       }
     }
@@ -389,7 +411,7 @@ class NavigationService {
     // Find nearest exit
     final exitPoint = _findBuildingExit(start, building, floor);
     if (exitPoint != null) {
-      final pathToExit = _findIndoorPath(start, exitPoint.position, floor);
+      final pathToExit = _findIndoorPath(start, exitPoint.position, floor, roadSystem: context.roadSystem);
       waypoints.addAll(pathToExit);
       waypoints.add(exitPoint.position);
       
@@ -452,9 +474,9 @@ class NavigationService {
         // Add floor change navigation
         floorChanges.add('Take stairs/elevator to ${floor.name}');
       }
-      
+
       // Indoor path to destination
-      final indoorPath = _findIndoorPath(entrance.position, end, floor);
+      final indoorPath = _findIndoorPath(entrance.position, end, floor, roadSystem: context.roadSystem);
       waypoints.addAll(indoorPath);
     }
     
@@ -567,35 +589,71 @@ class NavigationService {
     return entrances.first;
   }
 
-  /// Indoor pathfinding on a single floor
-  static List<LatLng> _findIndoorPath(LatLng start, LatLng end, Floor floor) {
-    // Simple pathfinding - in real implementation, use A* algorithm
-    final path = <LatLng>[];
-    
-    // Basic direct path with obstacle avoidance
-    const stepCount = 5;
-    for (int i = 1; i < stepCount; i++) {
-      final lat = start.latitude + (end.latitude - start.latitude) * (i / stepCount);
-      final lng = start.longitude + (end.longitude - start.longitude) * (i / stepCount);
-      path.add(LatLng(lat, lng));
+  /// Indoor pathfinding on a single floor using A* algorithm
+  static List<LatLng> _findIndoorPath(LatLng start, LatLng end, Floor floor, {RoadSystem? roadSystem}) {
+    if (roadSystem == null) {
+      // Fallback to direct path if no road system
+      return _directPath(start, end, 5);
     }
-    
-    return path;
+
+    try {
+      final graph = _getGraph(roadSystem);
+      final pathfinder = AStarPathfinder(graph);
+
+      final result = pathfinder.findPathFromPositions(
+        start,
+        end,
+        startFloorId: floor.id,
+        goalFloorId: floor.id,
+      );
+
+      if (result.success && result.fullPath.isNotEmpty) {
+        // Return path without start and end (they're added by caller)
+        if (result.fullPath.length > 2) {
+          return result.fullPath.sublist(1, result.fullPath.length - 1);
+        }
+      }
+    } catch (e) {
+      print('A* pathfinding failed for indoor path: $e');
+    }
+
+    // Fallback to direct path
+    return _directPath(start, end, 5);
   }
 
-  /// Outdoor pathfinding using road network
+  /// Outdoor pathfinding using road network and A* algorithm
   static List<LatLng> _findOutdoorPath(LatLng start, LatLng end, RoadSystem roadSystem) {
-    // Simple pathfinding - in real implementation, use road network
+    try {
+      final graph = _getGraph(roadSystem);
+      final pathfinder = AStarPathfinder(graph);
+
+      final result = pathfinder.findPathFromPositions(
+        start,
+        end,
+      );
+
+      if (result.success && result.fullPath.isNotEmpty) {
+        // Return path without start and end (they're added by caller)
+        if (result.fullPath.length > 2) {
+          return result.fullPath.sublist(1, result.fullPath.length - 1);
+        }
+      }
+    } catch (e) {
+      print('A* pathfinding failed for outdoor path: $e');
+    }
+
+    // Fallback to direct path
+    return _directPath(start, end, 10);
+  }
+
+  /// Simple direct path fallback
+  static List<LatLng> _directPath(LatLng start, LatLng end, int stepCount) {
     final path = <LatLng>[];
-    
-    // Find nearest roads and create path
-    const stepCount = 10;
     for (int i = 1; i < stepCount; i++) {
       final lat = start.latitude + (end.latitude - start.latitude) * (i / stepCount);
       final lng = start.longitude + (end.longitude - start.longitude) * (i / stepCount);
       path.add(LatLng(lat, lng));
     }
-    
     return path;
   }
 

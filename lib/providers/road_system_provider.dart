@@ -535,4 +535,387 @@ class RoadSystemProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Intersection management methods
+  Future<void> addOutdoorIntersection(String systemId, Intersection intersection) async {
+    try {
+      final system = _roadSystems.where((s) => s.id == systemId).firstOrNull;
+      if (system == null) throw Exception('System not found');
+
+      final updatedSystem = RoadSystem(
+        id: system.id,
+        name: system.name,
+        buildings: system.buildings,
+        outdoorRoads: system.outdoorRoads,
+        outdoorLandmarks: system.outdoorLandmarks,
+        outdoorIntersections: [...system.outdoorIntersections, intersection],
+        centerPosition: system.centerPosition,
+        zoom: system.zoom,
+        properties: system.properties,
+      );
+
+      await updateCurrentSystem(updatedSystem);
+    } catch (e) {
+      _setError('Failed to add outdoor intersection: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> removeOutdoorIntersection(String systemId, String intersectionId) async {
+    try {
+      final system = _roadSystems.where((s) => s.id == systemId).firstOrNull;
+      if (system == null) throw Exception('System not found');
+
+      final updatedSystem = RoadSystem(
+        id: system.id,
+        name: system.name,
+        buildings: system.buildings,
+        outdoorRoads: system.outdoorRoads,
+        outdoorLandmarks: system.outdoorLandmarks,
+        outdoorIntersections: system.outdoorIntersections
+            .where((i) => i.id != intersectionId)
+            .toList(),
+        centerPosition: system.centerPosition,
+        zoom: system.zoom,
+        properties: system.properties,
+      );
+
+      await updateCurrentSystem(updatedSystem);
+    } catch (e) {
+      _setError('Failed to remove outdoor intersection: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> updateOutdoorIntersection(String systemId, Intersection intersection) async {
+    try {
+      final system = _roadSystems.where((s) => s.id == systemId).firstOrNull;
+      if (system == null) throw Exception('System not found');
+
+      final intersections = [...system.outdoorIntersections];
+      final index = intersections.indexWhere((i) => i.id == intersection.id);
+      if (index != -1) {
+        intersections[index] = intersection;
+      }
+
+      final updatedSystem = RoadSystem(
+        id: system.id,
+        name: system.name,
+        buildings: system.buildings,
+        outdoorRoads: system.outdoorRoads,
+        outdoorLandmarks: system.outdoorLandmarks,
+        outdoorIntersections: intersections,
+        centerPosition: system.centerPosition,
+        zoom: system.zoom,
+        properties: system.properties,
+      );
+
+      await updateCurrentSystem(updatedSystem);
+    } catch (e) {
+      _setError('Failed to update outdoor intersection: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> addIntersectionToFloor(
+    String systemId,
+    String buildingId,
+    String floorId,
+    Intersection intersection,
+  ) async {
+    try {
+      final system = _roadSystems.where((s) => s.id == systemId).firstOrNull;
+      if (system == null) throw Exception('System not found');
+
+      final buildings = [...system.buildings];
+      final buildingIndex = buildings.indexWhere((b) => b.id == buildingId);
+      if (buildingIndex == -1) throw Exception('Building not found');
+
+      final building = buildings[buildingIndex];
+      final floors = [...building.floors];
+      final floorIndex = floors.indexWhere((f) => f.id == floorId);
+      if (floorIndex == -1) throw Exception('Floor not found');
+
+      final floor = floors[floorIndex];
+      final updatedFloor = Floor(
+        id: floor.id,
+        name: floor.name,
+        level: floor.level,
+        buildingId: floor.buildingId,
+        roads: floor.roads,
+        landmarks: floor.landmarks,
+        intersections: [...floor.intersections, intersection],
+        connectedFloors: floor.connectedFloors,
+        centerPosition: floor.centerPosition,
+        properties: floor.properties,
+      );
+
+      floors[floorIndex] = updatedFloor;
+
+      final updatedBuilding = Building(
+        id: building.id,
+        name: building.name,
+        centerPosition: building.centerPosition,
+        boundaryPoints: building.boundaryPoints,
+        floors: floors,
+        entranceFloorIds: building.entranceFloorIds,
+        defaultFloorLevel: building.defaultFloorLevel,
+        properties: building.properties,
+      );
+
+      buildings[buildingIndex] = updatedBuilding;
+
+      final updatedSystem = RoadSystem(
+        id: system.id,
+        name: system.name,
+        buildings: buildings,
+        outdoorRoads: system.outdoorRoads,
+        outdoorLandmarks: system.outdoorLandmarks,
+        outdoorIntersections: system.outdoorIntersections,
+        centerPosition: system.centerPosition,
+        zoom: system.zoom,
+        properties: system.properties,
+      );
+
+      await updateCurrentSystem(updatedSystem);
+    } catch (e) {
+      _setError('Failed to add intersection to floor: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> removeIntersectionFromFloor(
+    String systemId,
+    String buildingId,
+    String floorId,
+    String intersectionId,
+  ) async {
+    try {
+      final system = _roadSystems.where((s) => s.id == systemId).firstOrNull;
+      if (system == null) throw Exception('System not found');
+
+      final buildings = [...system.buildings];
+      final buildingIndex = buildings.indexWhere((b) => b.id == buildingId);
+      if (buildingIndex == -1) throw Exception('Building not found');
+
+      final building = buildings[buildingIndex];
+      final floors = [...building.floors];
+      final floorIndex = floors.indexWhere((f) => f.id == floorId);
+      if (floorIndex == -1) throw Exception('Floor not found');
+
+      final floor = floors[floorIndex];
+      final updatedFloor = Floor(
+        id: floor.id,
+        name: floor.name,
+        level: floor.level,
+        buildingId: floor.buildingId,
+        roads: floor.roads,
+        landmarks: floor.landmarks,
+        intersections: floor.intersections
+            .where((i) => i.id != intersectionId)
+            .toList(),
+        connectedFloors: floor.connectedFloors,
+        centerPosition: floor.centerPosition,
+        properties: floor.properties,
+      );
+
+      floors[floorIndex] = updatedFloor;
+
+      final updatedBuilding = Building(
+        id: building.id,
+        name: building.name,
+        centerPosition: building.centerPosition,
+        boundaryPoints: building.boundaryPoints,
+        floors: floors,
+        entranceFloorIds: building.entranceFloorIds,
+        defaultFloorLevel: building.defaultFloorLevel,
+        properties: building.properties,
+      );
+
+      buildings[buildingIndex] = updatedBuilding;
+
+      final updatedSystem = RoadSystem(
+        id: system.id,
+        name: system.name,
+        buildings: buildings,
+        outdoorRoads: system.outdoorRoads,
+        outdoorLandmarks: system.outdoorLandmarks,
+        outdoorIntersections: system.outdoorIntersections,
+        centerPosition: system.centerPosition,
+        zoom: system.zoom,
+        properties: system.properties,
+      );
+
+      await updateCurrentSystem(updatedSystem);
+    } catch (e) {
+      _setError('Failed to remove intersection from floor: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> updateIntersectionInFloor(
+    String systemId,
+    String buildingId,
+    String floorId,
+    Intersection intersection,
+  ) async {
+    try {
+      final system = _roadSystems.where((s) => s.id == systemId).firstOrNull;
+      if (system == null) throw Exception('System not found');
+
+      final buildings = [...system.buildings];
+      final buildingIndex = buildings.indexWhere((b) => b.id == buildingId);
+      if (buildingIndex == -1) throw Exception('Building not found');
+
+      final building = buildings[buildingIndex];
+      final floors = [...building.floors];
+      final floorIndex = floors.indexWhere((f) => f.id == floorId);
+      if (floorIndex == -1) throw Exception('Floor not found');
+
+      final floor = floors[floorIndex];
+      final intersections = [...floor.intersections];
+      final intersectionIndex =
+          intersections.indexWhere((i) => i.id == intersection.id);
+      if (intersectionIndex != -1) {
+        intersections[intersectionIndex] = intersection;
+      }
+
+      final updatedFloor = Floor(
+        id: floor.id,
+        name: floor.name,
+        level: floor.level,
+        buildingId: floor.buildingId,
+        roads: floor.roads,
+        landmarks: floor.landmarks,
+        intersections: intersections,
+        connectedFloors: floor.connectedFloors,
+        centerPosition: floor.centerPosition,
+        properties: floor.properties,
+      );
+
+      floors[floorIndex] = updatedFloor;
+
+      final updatedBuilding = Building(
+        id: building.id,
+        name: building.name,
+        centerPosition: building.centerPosition,
+        boundaryPoints: building.boundaryPoints,
+        floors: floors,
+        entranceFloorIds: building.entranceFloorIds,
+        defaultFloorLevel: building.defaultFloorLevel,
+        properties: building.properties,
+      );
+
+      buildings[buildingIndex] = updatedBuilding;
+
+      final updatedSystem = RoadSystem(
+        id: system.id,
+        name: system.name,
+        buildings: buildings,
+        outdoorRoads: system.outdoorRoads,
+        outdoorLandmarks: system.outdoorLandmarks,
+        outdoorIntersections: system.outdoorIntersections,
+        centerPosition: system.centerPosition,
+        zoom: system.zoom,
+        properties: system.properties,
+      );
+
+      await updateCurrentSystem(updatedSystem);
+    } catch (e) {
+      _setError('Failed to update intersection in floor: $e');
+      rethrow;
+    }
+  }
+
+  // Road management methods
+  Future<void> addOutdoorRoad(String systemId, Road road) async {
+    try {
+      final system = _roadSystems.where((s) => s.id == systemId).firstOrNull;
+      if (system == null) throw Exception('System not found');
+
+      final updatedSystem = RoadSystem(
+        id: system.id,
+        name: system.name,
+        buildings: system.buildings,
+        outdoorRoads: [...system.outdoorRoads, road],
+        outdoorLandmarks: system.outdoorLandmarks,
+        outdoorIntersections: system.outdoorIntersections,
+        centerPosition: system.centerPosition,
+        zoom: system.zoom,
+        properties: system.properties,
+      );
+
+      await updateCurrentSystem(updatedSystem);
+    } catch (e) {
+      _setError('Failed to add outdoor road: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> addRoadToFloor(
+    String systemId,
+    String buildingId,
+    String floorId,
+    Road road,
+  ) async {
+    try {
+      final system = _roadSystems.where((s) => s.id == systemId).firstOrNull;
+      if (system == null) throw Exception('System not found');
+
+      final buildings = [...system.buildings];
+      final buildingIndex = buildings.indexWhere((b) => b.id == buildingId);
+      if (buildingIndex == -1) throw Exception('Building not found');
+
+      final building = buildings[buildingIndex];
+      final floors = [...building.floors];
+      final floorIndex = floors.indexWhere((f) => f.id == floorId);
+      if (floorIndex == -1) throw Exception('Floor not found');
+
+      final floor = floors[floorIndex];
+      final updatedFloor = Floor(
+        id: floor.id,
+        name: floor.name,
+        level: floor.level,
+        buildingId: floor.buildingId,
+        roads: [...floor.roads, road],
+        landmarks: floor.landmarks,
+        intersections: floor.intersections,
+        connectedFloors: floor.connectedFloors,
+        centerPosition: floor.centerPosition,
+        properties: floor.properties,
+      );
+
+      floors[floorIndex] = updatedFloor;
+
+      final updatedBuilding = Building(
+        id: building.id,
+        name: building.name,
+        centerPosition: building.centerPosition,
+        boundaryPoints: building.boundaryPoints,
+        floors: floors,
+        entranceFloorIds: building.entranceFloorIds,
+        defaultFloorLevel: building.defaultFloorLevel,
+        properties: building.properties,
+      );
+
+      buildings[buildingIndex] = updatedBuilding;
+
+      final updatedSystem = RoadSystem(
+        id: system.id,
+        name: system.name,
+        buildings: buildings,
+        outdoorRoads: system.outdoorRoads,
+        outdoorLandmarks: system.outdoorLandmarks,
+        outdoorIntersections: system.outdoorIntersections,
+        centerPosition: system.centerPosition,
+        zoom: system.zoom,
+        properties: system.properties,
+      );
+
+      await updateCurrentSystem(updatedSystem);
+    } catch (e) {
+      _setError('Failed to add road to floor: $e');
+      rethrow;
+    }
+  }
+
 }
