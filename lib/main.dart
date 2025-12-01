@@ -5,6 +5,7 @@ import 'providers/road_system_provider.dart';
 import 'providers/building_provider.dart';
 import 'providers/offline_map_provider.dart';
 import 'screens/main_screen.dart';
+import 'theme/app_theme.dart';
 
 void main() {
   runApp(const UCRoadWaysApp());
@@ -19,75 +20,21 @@ class UCRoadWaysApp extends StatelessWidget {
       providers: [
         // Location services
         ChangeNotifierProvider(create: (context) => LocationProvider()),
-        
+
         // Road system management
         ChangeNotifierProvider(create: (context) => RoadSystemProvider()),
-        
+
         // Building and floor management
         ChangeNotifierProvider(create: (context) => BuildingProvider()),
-        
+
         // Offline map management
         ChangeNotifierProvider(create: (context) => OfflineMapProvider()),
       ],
       child: MaterialApp(
         title: 'UCRoadWays',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Colors.blue,
-            brightness: Brightness.light,
-          ),
-          useMaterial3: true,
-          appBarTheme: const AppBarTheme(
-            centerTitle: true,
-            elevation: 2,
-          ),
-          floatingActionButtonTheme: const FloatingActionButtonThemeData(
-            elevation: 4,
-          ),
-          cardTheme: const CardThemeData(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.all(Radius.circular(12)),
-            ),
-          ),
-          elevatedButtonTheme: ElevatedButtonThemeData(
-            style: ElevatedButton.styleFrom(
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ),
-        ),
-        darkTheme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Colors.blue,
-            brightness: Brightness.dark,
-          ),
-          useMaterial3: true,
-          appBarTheme: const AppBarTheme(
-            centerTitle: true,
-            elevation: 2,
-          ),
-          floatingActionButtonTheme: const FloatingActionButtonThemeData(
-            elevation: 4,
-          ),
-          cardTheme: const CardThemeData(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.all(Radius.circular(12)),
-            ),
-          ),
-          elevatedButtonTheme: ElevatedButtonThemeData(
-            style: ElevatedButton.styleFrom(
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ),
-        ),
+        theme: AppTheme.lightTheme,
+        darkTheme: AppTheme.darkTheme,
         themeMode: ThemeMode.system,
         home: const SplashScreen(),
       ),
