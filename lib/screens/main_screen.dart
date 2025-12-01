@@ -12,6 +12,7 @@ import '../widgets/map_widget.dart';
 import '../widgets/floating_controls.dart';
 import '../widgets/bottom_panel.dart';
 import '../widgets/floor_switcher.dart';
+import '../widgets/right_toolbar.dart';
 import '../screens/offline_map_screen.dart';
 import '../screens/road_system_manager_screen.dart';
 
@@ -499,7 +500,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 isExpanded: _isPanelExpanded,
                 onToggleExpanded: () => setState(() => _isPanelExpanded = !_isPanelExpanded),
               ),
-              
+
+              // Right toolbar
+              const RightToolbar(),
+
               // Network status overlay
               if (_showNetworkStatus)
                 Positioned(
