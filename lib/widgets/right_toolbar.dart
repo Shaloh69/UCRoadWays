@@ -56,121 +56,165 @@ class _RightToolbarState extends State<RightToolbar> with SingleTickerProviderSt
     return Consumer2<RoadSystemProvider, BuildingProvider>(
       builder: (context, roadSystemProvider, buildingProvider, child) {
         final hasSystem = roadSystemProvider.currentSystem != null;
+        final screenHeight = MediaQuery.of(context).size.height;
+        final topPadding = MediaQuery.of(context).padding.top;
+        final bottomPadding = MediaQuery.of(context).padding.bottom;
 
-        return Positioned(
-          right: 0,
-          top: MediaQuery.of(context).padding.top + 60,
-          bottom: 200,
-          child: AnimatedBuilder(
-            animation: _slideAnimation,
-            builder: (context, child) {
-              return Transform.translate(
-                offset: Offset(_isExpanded ? 0 : 200, 0),
-                child: Container(
-                  width: 80,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Colors.white.withOpacity(0.95),
-                        Colors.white.withOpacity(0.98),
-                      ],
-                      begin: Alignment.centerLeft,
-                      end: Alignment.centerRight,
-                    ),
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(20),
-                      bottomLeft: Radius.circular(20),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 10,
-                        offset: const Offset(-2, 0),
+        return Stack(
+          children: [
+            // Main toolbar panel - slides in/out
+            Positioned(
+              right: 0,
+              top: topPadding + 60,
+              bottom: bottomPadding + 160, // Dynamic bottom padding
+              child: AnimatedBuilder(
+                animation: _slideAnimation,
+                builder: (context, child) {
+                  return Transform.translate(
+                    offset: Offset(_isExpanded ? 0 : 64, 0), // Only hide the main panel, not toggle
+                    child: Container(
+                      width: 64,
+                      constraints: BoxConstraints(
+                        maxHeight: screenHeight - topPadding - bottomPadding - 220,
+                        minHeight: 200,
                       ),
-                    ],
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            Colors.white.withOpacity(0.95),
+                            Colors.white.withOpacity(0.98),
+                          ],
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                        ),
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          bottomLeft: Radius.circular(16),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.1),
+                            blurRadius: 10,
+                            offset: const Offset(-2, 0),
+                          ),
+                        ],
+                      ),
+                      child: SingleChildScrollView(
+                        physics: const BouncingScrollPhysics(),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const SizedBox(height: 8),
+
+                            // Road Systems Manager
+                            _buildToolButton(
+                              icon: Icons.alt_route,
+                              label: 'Systems',
+                              color: AppTheme.primaryBlue,
+                              onTap: () => _openScreen(const RoadSystemManagerScreen()),
+                            ),
+
+                            // Buildings Manager
+                            if (hasSystem)
+                              _buildToolButton(
+                                icon: Icons.business,
+                                label: 'Buildings',
+                                color: AppTheme.secondaryPurple,
+                                onTap: () => _openScreen(const BuildingManagerScreen()),
+                              ),
+
+                            // Node Management
+                            if (hasSystem)
+                              _buildToolButton(
+                                icon: Icons.circle,
+                                label: 'Nodes',
+                                color: AppTheme.warningAmber,
+                                onTap: () => _openScreen(NodeManagementScreen(
+                                  roadSystem: roadSystemProvider.currentSystem!,
+                                )),
+                              ),
+
+                            // Network Analysis
+                            if (hasSystem)
+                              _buildToolButton(
+                                icon: Icons.analytics,
+                                label: 'Analyze',
+                                color: AppTheme.accentTeal,
+                                onTap: () => _openScreen(const RoadNetworkAnalyzeScreen()),
+                              ),
+
+                            // Navigation
+                            if (hasSystem)
+                              _buildToolButton(
+                                icon: Icons.navigation,
+                                label: 'Navigate',
+                                color: AppTheme.successGreen,
+                                onTap: () => _openScreen(const NavigationScreen()),
+                              ),
+
+                            const SizedBox(height: 12),
+
+                            // Mode indicator
+                            if (hasSystem)
+                              _buildModeIndicator(buildingProvider),
+
+                            const SizedBox(height: 12),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+            // Toggle button - ALWAYS VISIBLE
+            Positioned(
+              right: 0,
+              top: topPadding + 60,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _toggleExpanded,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(20),
+                    bottomLeft: Radius.circular(20),
                   ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.start,
-                    children: [
-                      // Toggle button
-                      _buildToggleButton(),
-
-                      const Divider(height: 1),
-
-                      // Road Systems Manager
-                      _buildToolButton(
-                        icon: Icons.alt_route,
-                        label: 'Systems',
-                        color: AppTheme.primaryBlue,
-                        onTap: () => _openScreen(const RoadSystemManagerScreen()),
+                  child: Container(
+                    width: 32,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: _isExpanded
+                          ? [AppTheme.primaryBlue, AppTheme.secondaryPurple]
+                          : [AppTheme.successGreen, AppTheme.accentTeal],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
                       ),
-
-                      // Buildings Manager
-                      if (hasSystem)
-                        _buildToolButton(
-                          icon: Icons.business,
-                          label: 'Buildings',
-                          color: AppTheme.secondaryPurple,
-                          onTap: () => _openScreen(const BuildingManagerScreen()),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(20),
+                        bottomLeft: Radius.circular(20),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.2),
+                          blurRadius: 8,
+                          offset: const Offset(-2, 2),
                         ),
-
-                      // Node Management
-                      if (hasSystem)
-                        _buildToolButton(
-                          icon: Icons.circle,
-                          label: 'Nodes',
-                          color: AppTheme.warningAmber,
-                          onTap: () => _openScreen(NodeManagementScreen(
-                            roadSystem: roadSystemProvider.currentSystem!,
-                          )),
-                        ),
-
-                      // Network Analysis
-                      if (hasSystem)
-                        _buildToolButton(
-                          icon: Icons.analytics,
-                          label: 'Analyze',
-                          color: AppTheme.accentTeal,
-                          onTap: () => _openScreen(const RoadNetworkAnalyzeScreen()),
-                        ),
-
-                      // Navigation
-                      if (hasSystem)
-                        _buildToolButton(
-                          icon: Icons.navigation,
-                          label: 'Navigate',
-                          color: AppTheme.successGreen,
-                          onTap: () => _openScreen(const NavigationScreen()),
-                        ),
-
-                      const Spacer(),
-
-                      // Mode indicator
-                      _buildModeIndicator(buildingProvider),
-
-                      const SizedBox(height: 16),
-                    ],
+                      ],
+                    ),
+                    child: Icon(
+                      _isExpanded ? Icons.chevron_right : Icons.chevron_left,
+                      color: Colors.white,
+                      size: 20,
+                    ),
                   ),
                 ),
-              );
-            },
-          ),
+              ),
+            ),
+          ],
         );
       },
-    );
-  }
-
-  Widget _buildToggleButton() {
-    return InkWell(
-      onTap: _toggleExpanded,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        child: Icon(
-          _isExpanded ? Icons.chevron_right : Icons.chevron_left,
-          color: AppTheme.neutralGray600,
-          size: 24,
-        ),
-      ),
     );
   }
 
@@ -186,24 +230,28 @@ class _RightToolbarState extends State<RightToolbar> with SingleTickerProviderSt
       child: InkWell(
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 16),
+          width: 64,
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                padding: const EdgeInsets.all(8),
+                width: 40,
+                height: 40,
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
                       color,
                       color.withOpacity(0.7),
                     ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                   ),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(10),
                   boxShadow: [
                     BoxShadow(
                       color: color.withOpacity(0.3),
-                      blurRadius: 8,
+                      blurRadius: 6,
                       offset: const Offset(0, 2),
                     ),
                   ],
@@ -211,18 +259,20 @@ class _RightToolbarState extends State<RightToolbar> with SingleTickerProviderSt
                 child: Icon(
                   icon,
                   color: Colors.white,
-                  size: 24,
+                  size: 20,
                 ),
               ),
               const SizedBox(height: 4),
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 10,
+                  fontSize: 9,
                   fontWeight: FontWeight.w600,
                   color: AppTheme.neutralGray700,
                 ),
                 textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ],
           ),
@@ -233,18 +283,19 @@ class _RightToolbarState extends State<RightToolbar> with SingleTickerProviderSt
 
   Widget _buildModeIndicator(BuildingProvider buildingProvider) {
     return Container(
-      padding: const EdgeInsets.all(8),
-      margin: const EdgeInsets.symmetric(horizontal: 12),
+      width: 48,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
         color: buildingProvider.isIndoorMode
             ? AppTheme.secondaryPurple.withOpacity(0.1)
             : AppTheme.successGreen.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(
           color: buildingProvider.isIndoorMode
               ? AppTheme.secondaryPurple
               : AppTheme.successGreen,
-          width: 2,
+          width: 1.5,
         ),
       ),
       child: Column(
@@ -255,13 +306,13 @@ class _RightToolbarState extends State<RightToolbar> with SingleTickerProviderSt
             color: buildingProvider.isIndoorMode
                 ? AppTheme.secondaryPurple
                 : AppTheme.successGreen,
-            size: 20,
+            size: 18,
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Text(
-            buildingProvider.isIndoorMode ? 'Indoor' : 'Outdoor',
+            buildingProvider.isIndoorMode ? 'In' : 'Out',
             style: TextStyle(
-              fontSize: 9,
+              fontSize: 8,
               fontWeight: FontWeight.bold,
               color: buildingProvider.isIndoorMode
                   ? AppTheme.secondaryPurple
