@@ -13,6 +13,7 @@ import '../widgets/floating_controls.dart';
 import '../widgets/bottom_panel.dart';
 import '../widgets/floor_switcher.dart';
 import '../screens/offline_map_screen.dart';
+import '../screens/road_system_manager_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -844,6 +845,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                       ),
                   ],
                 ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.alt_route),
+                title: const Text('Road Systems'),
+                subtitle: const Text('Manage navigation networks'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const RoadSystemManagerScreen()),
+                  );
+                },
               ),
               ListTile(
                 leading: const Icon(Icons.map),
