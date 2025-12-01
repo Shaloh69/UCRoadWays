@@ -390,7 +390,7 @@ class _NodeManagementScreenState extends State<NodeManagementScreen> {
               ),
             ),
           const SizedBox(width: 8),
-          Text('${intersections.length} nodes'),
+          Text('${_getIntersections().length} nodes'),
         ],
       ),
     );
