@@ -119,6 +119,7 @@ class Floor {
   final String buildingId;
   final List<Road> roads;
   final List<Landmark> landmarks;
+  final List<Intersection> intersections; // Navigation intersections on this floor
   final List<String> connectedFloors; // Floors accessible from this floor
   final LatLng? centerPosition; // Center point for floor
   final Map<String, dynamic> properties;
@@ -130,6 +131,7 @@ class Floor {
     required this.buildingId,
     this.roads = const [],
     this.landmarks = const [],
+    this.intersections = const [],
     this.connectedFloors = const [],
     this.centerPosition,
     this.properties = const {},
@@ -152,6 +154,7 @@ class Floor {
     int? level,
     List<Road>? roads,
     List<Landmark>? landmarks,
+    List<Intersection>? intersections,
     List<String>? connectedFloors,
     LatLng? centerPosition,
     Map<String, dynamic>? properties, required String buildingId,
@@ -163,6 +166,7 @@ class Floor {
       buildingId: buildingId,
       roads: roads ?? this.roads,
       landmarks: landmarks ?? this.landmarks,
+      intersections: intersections ?? this.intersections,
       connectedFloors: connectedFloors ?? this.connectedFloors,
       centerPosition: centerPosition ?? this.centerPosition,
       properties: properties ?? this.properties,
