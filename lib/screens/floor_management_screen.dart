@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:uuid/uuid.dart';
 import '../models/models.dart';
 import '../providers/building_provider.dart';
 import '../providers/road_system_provider.dart';
@@ -579,22 +580,204 @@ class _FloorManagementScreenState extends State<FloorManagementScreen>
   }
 
   void _showAddFloorDialog([Building? building]) {
-    // Implementation for adding floor
+    final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
+
+    if (roadSystemProvider.currentSystem == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No road system selected')),
+      );
+      return;
+    }
+
+    // Get all buildings if no specific building is provided
+    final buildings = roadSystemProvider.currentSystem!.buildings;
+
+    if (buildings.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No buildings available. Create a building first.')),
+      );
+      return;
+    }
+
+    Building? selectedBuilding = building ?? (buildings.isNotEmpty ? buildings.first : null);
+    final nameController = TextEditingController();
+    final levelController = TextEditingController(text: '0');
+    String? errorText;
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Add Floor${building != null ? ' to ${building.name}' : ''}'),
-        content: const Text('Floor creation dialog implementation'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.layers, color: Colors.blue),
+              SizedBox(width: 8),
+              Text('Add Floor'),
+            ],
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Add'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Create a new floor in a building',
+                  style: TextStyle(fontSize: 14, color: Colors.grey),
+                ),
+                const SizedBox(height: 16),
+
+                // Building selection
+                if (building == null) ...[
+                  DropdownButtonFormField<Building>(
+                    value: selectedBuilding,
+                    decoration: const InputDecoration(
+                      labelText: 'Building *',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.business),
+                    ),
+                    items: buildings.map((b) => DropdownMenuItem(
+                      value: b,
+                      child: Text(b.name),
+                    )).toList(),
+                    onChanged: (value) {
+                      setState(() {
+                        selectedBuilding = value;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                ],
+
+                // Floor name
+                TextField(
+                  controller: nameController,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: 'Floor Name *',
+                    hintText: 'e.g., First Floor, Basement',
+                    errorText: errorText,
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.label),
+                  ),
+                  onChanged: (value) {
+                    if (errorText != null) {
+                      setState(() => errorText = null);
+                    }
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Floor level
+                TextField(
+                  controller: levelController,
+                  decoration: const InputDecoration(
+                    labelText: 'Floor Level *',
+                    hintText: '0 = Ground, >0 = Upper, <0 = Basement',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.layers),
+                    helperText: 'e.g., -2, -1, 0, 1, 2, 3',
+                  ),
+                  keyboardType: TextInputType.numberWithOptions(signed: true),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Level 0 = Ground Floor\nPositive = Upper floors\nNegative = Basements',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
+            ),
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final name = nameController.text.trim();
+                final levelText = levelController.text.trim();
+
+                // Validation
+                if (name.isEmpty) {
+                  setState(() => errorText = 'Floor name is required');
+                  return;
+                }
+
+                if (name.length < 2) {
+                  setState(() => errorText = 'Name must be at least 2 characters');
+                  return;
+                }
+
+                if (selectedBuilding == null) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Please select a building')),
+                  );
+                  return;
+                }
+
+                final level = int.tryParse(levelText);
+                if (level == null) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Invalid floor level. Must be a number.')),
+                  );
+                  return;
+                }
+
+                // Check for duplicate level in the same building
+                final isDuplicateLevel = selectedBuilding!.floors
+                    .any((f) => f.level == level);
+
+                if (isDuplicateLevel) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Floor level $level already exists in this building')),
+                  );
+                  return;
+                }
+
+                // Create new floor
+                final newFloor = Floor(
+                  id: const Uuid().v4(),
+                  name: name,
+                  level: level,
+                  buildingId: selectedBuilding!.id,
+                  roads: [],
+                  landmarks: [],
+                  connectedFloors: [],
+                  centerPosition: selectedBuilding!.centerPosition,
+                  properties: {
+                    'created': DateTime.now().toIso8601String(),
+                  },
+                );
+
+                Navigator.pop(context);
+
+                // Add floor using provider method
+                try {
+                  await roadSystemProvider.addFloorToBuilding(
+                    roadSystemProvider.currentSystem!.id,
+                    selectedBuilding!.id,
+                    newFloor,
+                  );
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Floor "$name" added successfully'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Failed to add floor: $e'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              },
+              child: const Text('Add Floor'),
+            ),
+          ],
+        ),
       ),
     );
   }

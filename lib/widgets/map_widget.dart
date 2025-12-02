@@ -1193,11 +1193,11 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
     );
   }
 
-  void _saveLandmark(LatLng point, String name, String type, String description,
-      RoadSystemProvider roadSystemProvider, BuildingProvider buildingProvider) {
-    
+  Future<void> _saveLandmark(LatLng point, String name, String type, String description,
+      RoadSystemProvider roadSystemProvider, BuildingProvider buildingProvider) async {
+
     if (name.isEmpty) name = type.replaceAll('_', ' ').toUpperCase();
-    
+
     final landmark = Landmark(
       id: const Uuid().v4(),
       name: name,
@@ -1211,26 +1211,43 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
         'created': DateTime.now().toIso8601String(),
       },
     );
-    
-    // FIXED: Add landmark to current system directly
+
+    // FIXED: Use proper provider methods that persist to storage
     if (roadSystemProvider.currentSystem != null) {
-      if (buildingProvider.isIndoorMode && buildingProvider.selectedFloorId != null) {
-        // Add to indoor floor
-        roadSystemProvider.currentSystem!.buildings
-          .where((b) => b.floors.any((f) => f.id == buildingProvider.selectedFloorId))
-          .first.floors
-          .where((f) => f.id == buildingProvider.selectedFloorId)
-          .first.landmarks.add(landmark);
-      } else {
-        // Add to outdoor landmarks
-        roadSystemProvider.currentSystem!.outdoorLandmarks.add(landmark);
+      try {
+        if (buildingProvider.isIndoorMode &&
+            buildingProvider.selectedFloorId != null &&
+            buildingProvider.selectedBuildingId != null) {
+          // Add to indoor floor using provider method
+          await roadSystemProvider.addLandmarkToFloor(
+            roadSystemProvider.currentSystem!.id,
+            buildingProvider.selectedBuildingId!,
+            buildingProvider.selectedFloorId!,
+            landmark,
+          );
+        } else {
+          // Add to outdoor landmarks using provider method
+          await roadSystemProvider.addOutdoorLandmark(
+            roadSystemProvider.currentSystem!.id,
+            landmark,
+          );
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Landmark "$name" added and saved successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save landmark: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
-      roadSystemProvider.refresh(); // Notify listeners
     }
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Landmark "$name" added successfully')),
-    );
   }
 
   void _addBuildingAtPoint(LatLng point, RoadSystemProvider roadSystemProvider) {
@@ -1327,12 +1344,12 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
     );
   }
 
-  void _saveBuilding(LatLng point, String name, RoadSystemProvider roadSystemProvider) {
+  Future<void> _saveBuilding(LatLng point, String name, RoadSystemProvider roadSystemProvider) async {
     if (name.isEmpty) name = 'Building ${DateTime.now().millisecondsSinceEpoch}';
-    
+
     final buildingId = const Uuid().v4();
     final floorId = const Uuid().v4();
-    
+
     // Create ground floor
     final groundFloor = Floor(
       id: floorId,
@@ -1345,7 +1362,7 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
       centerPosition: point,
       properties: {},
     );
-    
+
     // Create building
     final building = Building(
       id: buildingId,
@@ -1359,16 +1376,30 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
         'created': DateTime.now().toIso8601String(),
       },
     );
-    
-    // FIXED: Add building to current system directly
+
+    // FIXED: Use proper provider method that persists to storage
     if (roadSystemProvider.currentSystem != null) {
-      roadSystemProvider.currentSystem!.buildings.add(building);
-      roadSystemProvider.refresh(); // Notify listeners
+      try {
+        await roadSystemProvider.addBuilding(
+          roadSystemProvider.currentSystem!.id,
+          building,
+        );
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Building "$name" added and saved successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save building: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Building "$name" added successfully')),
-    );
   }
 
   // FIXED: Public methods for external control (matching what FloatingControls expects)

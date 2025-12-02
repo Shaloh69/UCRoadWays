@@ -649,15 +649,82 @@ class _BuildingManagerScreenState extends State<BuildingManagerScreen>
   }
 
   void _showAddBuildingDialog() {
+    final roadSystemProvider = Provider.of<RoadSystemProvider>(context, listen: false);
+
+    if (roadSystemProvider.currentSystem == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No road system selected')),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Add Building'),
-        content: const Text('Building creation feature coming soon.'),
+        title: const Row(
+          children: [
+            Icon(Icons.business, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Add Building'),
+          ],
+        ),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'To create a building:',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            SizedBox(height: 16),
+            Row(
+              children: [
+                Icon(Icons.looks_one, color: Colors.blue),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text('Go back to the main map screen'),
+                ),
+              ],
+            ),
+            SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.looks_two, color: Colors.blue),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text('Tap the "Add Building" button in the floating controls'),
+                ),
+              ],
+            ),
+            SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.looks_3, color: Colors.blue),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text('Tap on the map where you want to place the building'),
+                ),
+              ],
+            ),
+            SizedBox(height: 16),
+            Text(
+              'Buildings will be created with a default ground floor and can be customized after creation.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.map),
+            label: const Text('Go to Map'),
+            onPressed: () {
+              Navigator.pop(context); // Close dialog
+              Navigator.pop(context); // Close building manager screen
+            },
           ),
         ],
       ),
