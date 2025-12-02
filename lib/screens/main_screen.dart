@@ -3,7 +3,9 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:provider/provider.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
+import 'package:share_plus/share_plus.dart';
 import '../providers/location_provider.dart';
 import '../providers/road_system_provider.dart';
 import '../providers/building_provider.dart';
@@ -15,6 +17,7 @@ import '../widgets/floor_switcher.dart';
 import '../widgets/right_toolbar.dart';
 import '../screens/offline_map_screen.dart';
 import '../screens/road_system_manager_screen.dart';
+import '../services/geojson_export_service.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -873,6 +876,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   );
                 },
               ),
+              // Export Data option
+              if (roadSystemProvider.currentSystem != null)
+                ListTile(
+                  leading: const Icon(Icons.file_download, color: Colors.blue),
+                  title: const Text('Export Data'),
+                  subtitle: const Text('Export road system to GeoJSON/JSON'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showExportDialog(roadSystemProvider);
+                  },
+                ),
               ListTile(
                 leading: const Icon(Icons.info),
                 title: const Text('About'),
@@ -924,6 +938,327 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             },
             style: TextButton.styleFrom(foregroundColor: Colors.red),
             child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showExportDialog(RoadSystemProvider roadSystemProvider) {
+    if (roadSystemProvider.currentSystem == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No road system loaded. Please create or load a system first.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.file_download, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Export Road System'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Export: ${roadSystemProvider.currentSystem!.name}',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 16),
+            const Text('Choose export format:'),
+            const SizedBox(height: 12),
+
+            // GeoJSON Export
+            ListTile(
+              leading: const Icon(Icons.map, color: Colors.green),
+              title: const Text('GeoJSON (Single File)'),
+              subtitle: const Text('Standard format for mapping applications'),
+              onTap: () {
+                Navigator.pop(context);
+                _exportToGeoJSON(roadSystemProvider);
+              },
+            ),
+
+            // Layered GeoJSON Export
+            ListTile(
+              leading: const Icon(Icons.layers, color: Colors.blue),
+              title: const Text('GeoJSON (Layered)'),
+              subtitle: const Text('Separate files for each layer'),
+              onTap: () {
+                Navigator.pop(context);
+                _exportToLayeredGeoJSON(roadSystemProvider);
+              },
+            ),
+
+            // JSON Export
+            ListTile(
+              leading: const Icon(Icons.code, color: Colors.orange),
+              title: const Text('JSON'),
+              subtitle: const Text('Native UCRoadWays format'),
+              onTap: () {
+                Navigator.pop(context);
+                _exportToJSON(roadSystemProvider);
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _exportToGeoJSON(RoadSystemProvider roadSystemProvider) async {
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+              SizedBox(width: 12),
+              Text('Exporting to GeoJSON...'),
+            ],
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      final file = await GeoJsonExportService.exportToGeoJSON(
+        roadSystemProvider.currentSystem!,
+        includeIndoorData: true,
+        includeMetadata: true,
+      );
+
+      if (mounted) {
+        _showExportSuccessDialog(file, 'GeoJSON');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Export failed: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _exportToLayeredGeoJSON(RoadSystemProvider roadSystemProvider) async {
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+              SizedBox(width: 12),
+              Text('Exporting to layered GeoJSON...'),
+            ],
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+
+      final files = await GeoJsonExportService.exportToLayeredGeoJSON(
+        roadSystemProvider.currentSystem!,
+      );
+
+      if (mounted) {
+        _showLayeredExportSuccessDialog(files);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Layered export failed: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _exportToJSON(RoadSystemProvider roadSystemProvider) async {
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+              SizedBox(width: 12),
+              Text('Exporting to JSON...'),
+            ],
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      final jsonString = roadSystemProvider.exportToJson(
+        roadSystemProvider.currentSystem!.id,
+      );
+
+      // Save to file
+      final directory = await Directory.systemTemp.createTemp('ucroadways_export');
+      final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
+      final fileName = '${roadSystemProvider.currentSystem!.name}_$timestamp.json';
+      final file = File('${directory.path}/$fileName');
+      await file.writeAsString(jsonString);
+
+      if (mounted) {
+        _showExportSuccessDialog(file, 'JSON');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('JSON export failed: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    }
+  }
+
+  void _showExportSuccessDialog(File file, String format) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.check_circle, color: Colors.green[600]),
+            const SizedBox(width: 8),
+            const Text('Export Successful'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Exported to $format successfully!'),
+            const SizedBox(height: 12),
+            const Text('File location:', style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            SelectableText(
+              file.path,
+              style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () async {
+              Navigator.pop(context);
+              try {
+                await Share.shareXFiles(
+                  [XFile(file.path)],
+                  subject: 'UCRoadWays Export - ${format}',
+                );
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Failed to share: $e')),
+                  );
+                }
+              }
+            },
+            icon: const Icon(Icons.share),
+            label: const Text('Share'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showLayeredExportSuccessDialog(Map<String, File> files) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.check_circle, color: Colors.green[600]),
+            const SizedBox(width: 8),
+            const Text('Layered Export Successful'),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Exported ${files.length} layer files:'),
+              const SizedBox(height: 12),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: files.entries.map((entry) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            Icon(Icons.insert_drive_file, size: 16, color: Colors.blue[700]),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                entry.key,
+                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Divider(),
+              const SizedBox(height: 8),
+              const Text('Files saved to:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+              SelectableText(
+                files.values.first.parent.path,
+                style: const TextStyle(fontSize: 10, fontFamily: 'monospace'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
           ),
         ],
       ),
