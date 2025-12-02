@@ -32,13 +32,30 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+             // Keep your signing config (or set your real release signing here)
             signingConfig = signingConfigs.getByName("debug")
+
+            // If you are using R8/proguard for release, keep the proguard file reference:
+            // If you prefer to disable minification for now, set isMinifyEnabled = false
+            // (temporary workaround).
+            // Recommended: keep minification and add keep rules (we'll add them below).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }
 
 flutter {
     source = "../.."
+}
+// Add dependencies here (Kotlin DSL)
+dependencies {
+    // Add Play Core so R8 can resolve SplitCompat / SplitInstall / Tasks used by Flutter
+    implementation("com.google.android.play:core:1.10.3")
+    // optionally if you want Kotlin extensions:
+    // implementation("com.google.android.play:core-ktx:1.8.1")
 }

@@ -1,4 +1,4 @@
 {
-    "cmake.sourceDirectory": "C:/Users/Shaloh/OneDrive/Desktop/Projects/Thesis/UCWays_RoadMaker/ucroadways/linux",
-    "java.configuration.updateBuildConfiguration": "interactive"
+    "cmake.sourceDirectory": "C:/Projects/Thesis/UCWays_RoadMaker/ucroadways/windows/flutter",
+    "java.configuration.updateBuildConfiguration": "automatic"
 }
