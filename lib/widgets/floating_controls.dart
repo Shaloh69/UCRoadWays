@@ -88,10 +88,14 @@ class _FloatingControlsState extends State<FloatingControls>
               ),
             ),
             
-            // Expanded controls
+            // Expanded controls - FIXED: Add max height constraint
             AnimatedBuilder(
               animation: _animation,
               builder: (context, child) {
+                // FIXED: Calculate safe max height to avoid overflow
+                final screenHeight = MediaQuery.of(context).size.height;
+                final maxHeight = screenHeight - 200; // Leave space for FAB and other UI
+
                 return Positioned(
                   right: 16,
                   bottom: 80,
@@ -99,9 +103,15 @@ class _FloatingControlsState extends State<FloatingControls>
                     scale: _animation.value,
                     child: Opacity(
                       opacity: _animation.value,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxHeight: maxHeight, // FIXED: Prevent overflow
+                        ),
+                        child: SingleChildScrollView(
+                          physics: const BouncingScrollPhysics(),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
                           // Mode toggle (indoor/outdoor)
                           _buildModeToggleButton(buildingProvider),
                           
@@ -157,7 +167,9 @@ class _FloatingControlsState extends State<FloatingControls>
                           // Add building button (only in outdoor mode)
                           if (hasSystem && !buildingProvider.isIndoorMode)
                             _buildAddBuildingButton(),
-                        ],
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ),

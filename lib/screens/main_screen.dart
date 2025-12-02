@@ -487,10 +487,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 mapController: _mapController,
               ),
               
-              // Floor switcher (if in building mode)
+              // Floor switcher (if in building mode) - FIXED: Pass panel state for responsive positioning
               if (buildingProvider.isIndoorMode &&
                   buildingProvider.getSelectedBuilding(roadSystemProvider.currentSystem) != null)
-                FloorSwitcher(mapController: _mapController),
+                FloorSwitcher(
+                  mapController: _mapController,
+                  isPanelExpanded: _isPanelExpanded,
+                  panelHeight: _isPanelExpanded
+                      ? MediaQuery.of(context).size.height * 0.6
+                      : 120,
+                ),
               
               // Floating action buttons
               FloatingControls(
@@ -525,10 +531,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   child: _buildDownloadIndicator(offlineMapProvider),
                 ),
               
-              // GPS status indicator
+              // GPS status indicator - FIXED: Moved to right side to avoid FloorSwitcher
               Positioned(
-                bottom: 200,
-                left: 16,
+                bottom: _isPanelExpanded ? MediaQuery.of(context).size.height * 0.6 + 16 : 136,
+                right: 90, // Position next to map controls
                 child: _buildGPSStatusIndicator(locationProvider),
               ),
               

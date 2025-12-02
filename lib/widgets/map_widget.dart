@@ -1073,49 +1073,93 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
     _showAddLandmarkDialog(point, roadSystemProvider, buildingProvider);
   }
 
-  void _showAddLandmarkDialog(LatLng point, RoadSystemProvider roadSystemProvider, 
+  void _showAddLandmarkDialog(LatLng point, RoadSystemProvider roadSystemProvider,
       BuildingProvider buildingProvider) {
-    
+
     final nameController = TextEditingController();
     final descriptionController = TextEditingController();
     String selectedType = 'information';
-    
+    String? errorText; // FIXED: Added validation
+
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
-          title: const Text('Add Landmark'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
+          title: const Row(
             children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(labelText: 'Name'),
-              ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                initialValue: selectedType,
-                decoration: const InputDecoration(labelText: 'Type'),
-                items: [
-                  'information', 'entrance', 'elevator', 'stairs', 'restroom',
-                  'emergency_exit', 'parking', 'office', 'classroom', 'laboratory'
-                ].map((type) => DropdownMenuItem(
-                  value: type,
-                  child: Text(type.replaceAll('_', ' ').toUpperCase()),
-                )).toList(),
-                onChanged: (value) {
-                  setState(() {
-                    selectedType = value!;
-                  });
-                },
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: descriptionController,
-                decoration: const InputDecoration(labelText: 'Description (optional)'),
-                maxLines: 2,
-              ),
+              Icon(Icons.place, color: Colors.green),
+              SizedBox(width: 8),
+              Text('Add Landmark'),
             ],
+          ),
+          content: SingleChildScrollView( // FIXED: Make scrollable for small screens
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  buildingProvider.isIndoorMode
+                      ? 'Add an indoor landmark at this location'
+                      : 'Add an outdoor landmark at this location',
+                  style: const TextStyle(fontSize: 14, color: Colors.grey),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: nameController,
+                  autofocus: true, // FIXED: Auto-focus
+                  decoration: InputDecoration(
+                    labelText: 'Landmark Name *',
+                    hintText: 'e.g., Main Entrance',
+                    errorText: errorText,
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.label),
+                  ),
+                  onChanged: (value) {
+                    if (errorText != null) {
+                      setState(() => errorText = null);
+                    }
+                  },
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  value: selectedType,
+                  decoration: const InputDecoration(
+                    labelText: 'Type *',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.category),
+                  ),
+                  items: [
+                    'information', 'entrance', 'elevator', 'stairs', 'restroom',
+                    'emergency_exit', 'parking', 'office', 'classroom', 'laboratory'
+                  ].map((type) => DropdownMenuItem(
+                    value: type,
+                    child: Row(
+                      children: [
+                        Icon(_getLandmarkIcon(type), size: 16),
+                        const SizedBox(width: 8),
+                        Text(type.replaceAll('_', ' ').toUpperCase()),
+                      ],
+                    ),
+                  )).toList(),
+                  onChanged: (value) {
+                    setState(() {
+                      selectedType = value!;
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: descriptionController,
+                  decoration: const InputDecoration(
+                    labelText: 'Description (optional)',
+                    hintText: 'Add additional details...',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.description),
+                  ),
+                  maxLines: 3,
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -1124,11 +1168,24 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
             ),
             ElevatedButton(
               onPressed: () {
+                final name = nameController.text.trim();
+
+                // FIXED: Validate landmark name
+                if (name.isEmpty) {
+                  setState(() => errorText = 'Landmark name is required');
+                  return;
+                }
+
+                if (name.length < 2) {
+                  setState(() => errorText = 'Name must be at least 2 characters');
+                  return;
+                }
+
                 Navigator.pop(context);
-                _saveLandmark(point, nameController.text.trim(), selectedType,
+                _saveLandmark(point, name, selectedType,
                     descriptionController.text.trim(), roadSystemProvider, buildingProvider);
               },
-              child: const Text('Add'),
+              child: const Text('Create Landmark'),
             ),
           ],
         ),
@@ -1182,31 +1239,90 @@ class UCRoadWaysMapState extends State<UCRoadWaysMap> with WidgetsBindingObserve
 
   void _showAddBuildingDialog(LatLng point, RoadSystemProvider roadSystemProvider) {
     final nameController = TextEditingController();
-    
+    String? errorText; // FIXED: Added validation error tracking
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Building'),
-        content: TextField(
-          controller: nameController,
-          decoration: const InputDecoration(
-            labelText: 'Building Name',
-            hintText: 'Enter building name',
+      builder: (context) => StatefulBuilder( // FIXED: Use StatefulBuilder for validation
+        builder: (context, setState) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.business, color: Colors.purple),
+              SizedBox(width: 8),
+              Text('Add Building'),
+            ],
           ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Create a new building at this location',
+                style: TextStyle(fontSize: 14, color: Colors.grey),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: nameController,
+                autofocus: true, // FIXED: Auto-focus for better UX
+                decoration: InputDecoration(
+                  labelText: 'Building Name *',
+                  hintText: 'e.g., Engineering Building',
+                  errorText: errorText,
+                  border: const OutlineInputBorder(),
+                  prefixIcon: const Icon(Icons.business),
+                ),
+                onChanged: (value) {
+                  // FIXED: Clear error when user types
+                  if (errorText != null) {
+                    setState(() => errorText = null);
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Location: ${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}',
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final name = nameController.text.trim();
+
+                // FIXED: Validate building name
+                if (name.isEmpty) {
+                  setState(() => errorText = 'Building name is required');
+                  return;
+                }
+
+                if (name.length < 3) {
+                  setState(() => errorText = 'Name must be at least 3 characters');
+                  return;
+                }
+
+                // FIXED: Check for duplicate names
+                if (roadSystemProvider.currentSystem != null) {
+                  final isDuplicate = roadSystemProvider.currentSystem!.buildings
+                      .any((b) => b.name.toLowerCase() == name.toLowerCase());
+
+                  if (isDuplicate) {
+                    setState(() => errorText = 'A building with this name already exists');
+                    return;
+                  }
+                }
+
+                Navigator.pop(context);
+                _saveBuilding(point, name, roadSystemProvider);
+              },
+              child: const Text('Create Building'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _saveBuilding(point, nameController.text.trim(), roadSystemProvider);
-            },
-            child: const Text('Add'),
-          ),
-        ],
       ),
     );
   }

@@ -69,7 +69,7 @@ class _RightToolbarState extends State<RightToolbar> with SingleTickerProviderSt
             Positioned(
               right: 0,
               top: topPadding + 60,
-              bottom: bottomPadding + 160, // Dynamic bottom padding
+              bottom: bottomPadding + 200, // FIXED: Increased padding to avoid bottom panel
               child: AnimatedBuilder(
                 animation: _slideAnimation,
                 builder: (context, child) {
@@ -78,7 +78,7 @@ class _RightToolbarState extends State<RightToolbar> with SingleTickerProviderSt
                     child: Container(
                       width: 64,
                       constraints: BoxConstraints(
-                        maxHeight: screenHeight - topPadding - bottomPadding - 220,
+                        maxHeight: (screenHeight - topPadding - bottomPadding - 260).clamp(200, double.infinity), // FIXED: Better constraint
                         minHeight: 200,
                       ),
                       decoration: BoxDecoration(

@@ -7,10 +7,14 @@ import '../models/models.dart';
 
 class FloorSwitcher extends StatefulWidget {
   final MapController mapController;
+  final bool isPanelExpanded; // FIXED: Added to track panel state
+  final double panelHeight; // FIXED: Added to calculate responsive position
 
   const FloorSwitcher({
     super.key,
     required this.mapController,
+    this.isPanelExpanded = false,
+    this.panelHeight = 120,
   });
 
   @override
@@ -67,12 +71,18 @@ class _FloorSwitcherState extends State<FloorSwitcher>
           return const SizedBox.shrink();
         }
 
+        // FIXED: Calculate responsive bottom position based on panel state
+        final bottomPosition = widget.panelHeight + 16; // Panel height + 16px margin
+
         return Positioned(
           left: 16,
-          bottom: 180,
+          bottom: bottomPosition, // FIXED: Dynamic position based on panel
           child: AnimatedBuilder(
             animation: _animation,
             builder: (context, child) {
+              // FIXED: Calculate max height to avoid panel overlap
+              final maxHeight = MediaQuery.of(context).size.height - bottomPosition - 100;
+
               return Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -80,14 +90,14 @@ class _FloorSwitcherState extends State<FloorSwitcher>
                   if (_isExpanded) ...[
                     Container(
                       constraints: BoxConstraints(
-                        maxHeight: MediaQuery.of(context).size.height * 0.4,
-                        maxWidth: 280, // ENHANCED: Limit width for better UX
+                        maxHeight: maxHeight * 0.6, // FIXED: Responsive max height
+                        maxWidth: 280,
                       ),
                       child: _buildExpandedFloorList(selectedBuilding, selectedFloor, buildingProvider),
                     ),
                     const SizedBox(height: 8),
                   ],
-                  
+
                   // Current floor button
                   _buildCurrentFloorButton(selectedBuilding, selectedFloor, buildingProvider),
                 ],
